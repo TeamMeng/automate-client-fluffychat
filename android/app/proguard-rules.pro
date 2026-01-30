@@ -68,6 +68,7 @@
 -dontwarn org.bouncycastle.**
 
 # 小米/OPPO/vivo 厂商通道
+-keep class com.xiaomi.** {*;}
 -dontwarn com.xiaomi.**
 -dontwarn com.coloros.**
 -keep class com.vivo.** { *; }

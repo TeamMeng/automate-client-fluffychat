@@ -86,6 +86,8 @@ android {
     val appName = getDartDefine("APP_NAME") ?: "Psygo"
     val vivoAppId = getDartDefine("VIVO_APP_ID") ?: "106014439"
     val vivoApiKey = getDartDefine("VIVO_API_KEY") ?: "dc64a38d94ecff572fc1122a1a753520"
+    val xiaomiAppId = getDartDefine("XIAOMI_APP_ID") ?: "2882303761520483412"
+    val xiaomiAppKey = getDartDefine("XIAOMI_APP_KEY") ?: "5942048378412"
 
     defaultConfig {
         applicationId = "com.creativekoalas.psygo$appIdSuffix"
@@ -98,6 +100,8 @@ android {
         manifestPlaceholders["appName"] = appName
         manifestPlaceholders["VIVO_APP_ID"] = vivoAppId
         manifestPlaceholders["VIVO_API_KEY"] = vivoApiKey
+        manifestPlaceholders["XIAOMI_APP_ID"] = xiaomiAppId
+        manifestPlaceholders["XIAOMI_APP_KEY"] = xiaomiAppKey
     }
 
     signingConfigs {
