@@ -17,12 +17,14 @@ class EmployeeDetailSheet extends StatefulWidget {
   final Agent employee;
   final VoidCallback? onDelete;
   final bool isDialog;
+  final bool isDeleting;
 
   const EmployeeDetailSheet({
     super.key,
     required this.employee,
     this.onDelete,
     this.isDialog = false,
+    this.isDeleting = false,
   });
 
   @override
@@ -421,7 +423,8 @@ class _EmployeeDetailSheetState extends State<EmployeeDetailSheet> {
         _buildSkillsList(theme, l10n),
       ],
 
-      // 沟通和汇报风格设置
+      // 沟通和汇报风格设置（临时隐藏）
+      /*
       if (employee.isReady && _availableStyles != null) ...[
         Padding(
           padding: const EdgeInsets.fromLTRB(24, 16, 24, 12),
@@ -452,19 +455,31 @@ class _EmployeeDetailSheetState extends State<EmployeeDetailSheet> {
         ),
         _buildStyleSelectors(theme, l10n),
       ],
+      */
 
       // 优化按钮（删除）
       Padding(
         padding: const EdgeInsets.fromLTRB(24, 8, 24, 28),
         child: OutlinedButton.icon(
-          onPressed: () => _confirmDelete(context),
-          icon: Icon(
-            Icons.delete_outline_rounded,
-            color: theme.colorScheme.error,
-            size: 18,
-          ),
+          onPressed: widget.isDeleting ? null : () => _confirmDelete(context),
+          icon: widget.isDeleting
+              ? SizedBox(
+                  width: 18,
+                  height: 18,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2,
+                    color: theme.colorScheme.error,
+                  ),
+                )
+              : Icon(
+                  Icons.delete_outline_rounded,
+                  color: theme.colorScheme.error,
+                  size: 18,
+                ),
           label: Text(
-            l10n.deleteEmployee,
+            widget.isDeleting
+                ? '${l10n.deleteEmployee}...'
+                : l10n.deleteEmployee,
             style: TextStyle(
               color: theme.colorScheme.error,
               fontWeight: FontWeight.w600,
@@ -550,6 +565,37 @@ class _EmployeeDetailSheetState extends State<EmployeeDetailSheet> {
 
   Widget _buildStatusBadge(ThemeData theme, L10n l10n) {
     final employee = widget.employee;
+
+    if (widget.isDeleting) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        decoration: BoxDecoration(
+          color: theme.colorScheme.errorContainer.withValues(alpha: 0.2),
+          borderRadius: BorderRadius.circular(16),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            SizedBox(
+              width: 14,
+              height: 14,
+              child: CircularProgressIndicator(
+                strokeWidth: 2,
+                color: theme.colorScheme.error,
+              ),
+            ),
+            const SizedBox(width: 8),
+            Text(
+              '${l10n.deleteEmployee}...',
+              style: theme.textTheme.labelMedium?.copyWith(
+                color: theme.colorScheme.error,
+                fontWeight: FontWeight.w600,
+              ),
+            ),
+          ],
+        ),
+      );
+    }
 
     if (!employee.isReady) {
       return Container(

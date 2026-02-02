@@ -2,6 +2,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:aliyun_push/aliyun_push.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:http/http.dart' as http;
 import 'package:matrix/matrix.dart';
@@ -37,6 +38,30 @@ class AliyunPushService {
 
   /// 正在导航到的房间 ID（用于防止导航过程中的竞态条件）
   String? _navigatingToRoomId;
+
+  void _audit(String message) {
+    if (!kReleaseMode) return;
+    // Use print to ensure logs show up in release builds.
+    // ignore: avoid_print
+    print('[PUSH_AUDIT] $message');
+  }
+
+  String _mask(String? value, {int prefix = 4, int suffix = 4}) {
+    if (value == null || value.isEmpty) return 'null';
+    if (value.length <= prefix + suffix) return value;
+    return '${value.substring(0, prefix)}...${value.substring(value.length - suffix)}';
+  }
+
+  String _truncate(String? value, {int max = 200}) {
+    if (value == null || value.isEmpty) return '';
+    if (value.length <= max) return value;
+    return '${value.substring(0, max)}...';
+  }
+
+  bool get _isAppResumed {
+    final state = WidgetsBinding.instance.lifecycleState;
+    return state == null || state == AppLifecycleState.resumed;
+  }
 
   AliyunPushService._();
 
@@ -92,6 +117,7 @@ class AliyunPushService {
 
     try {
       Logs().i('[AliyunPush] Initializing with appKey: $_appKey');
+      _audit('init start appKey=$_appKey');
 
       // 初始化本地通知（用于显示透传消息）
       await _initLocalNotifications();
@@ -110,6 +136,7 @@ class AliyunPushService {
 
       if (code == kAliyunPushSuccessCode) {
         Logs().i('[AliyunPush] SDK initialized successfully');
+        _audit('init success');
         _initialized = true;
 
         // 获取设备 ID
@@ -139,10 +166,12 @@ class AliyunPushService {
         return true;
       } else {
         Logs().e('[AliyunPush] SDK init failed: code=$code, msg=$errorMsg');
+        _audit('init failed code=$code msg=$errorMsg');
         return false;
       }
     } catch (e, s) {
       Logs().e('[AliyunPush] SDK init exception', e, s);
+      _audit('init exception $e');
       return false;
     }
   }
@@ -199,9 +228,11 @@ class AliyunPushService {
   Future<void> _fetchDeviceId() async {
     try {
       _deviceId = await _aliyunPush.getDeviceId();
-      Logs().i('[AliyunPush] Device ID: $_deviceId');
+      Logs().i('[AliyunPush] Device ID: ${_mask(_deviceId)} (len=${_deviceId?.length ?? 0})');
+      _audit('deviceId=${_mask(_deviceId)}');
     } catch (e) {
       Logs().w('[AliyunPush] Failed to get device ID', e);
+      _audit('deviceId fetch failed $e');
     }
   }
 
@@ -389,14 +420,14 @@ class AliyunPushService {
 
       // 检查用户是否在当前房间
       final activeRoomId = activeRoomIdGetter?.call();
-      if (activeRoomId != null && activeRoomId == roomId) {
+      if (_isAppResumed && activeRoomId != null && activeRoomId == roomId) {
         Logs().d('[AliyunPush] User is in current room, skip notification');
         setBadgeNumber(badge);
         return;
       }
 
       // 检查用户是否正在导航到该房间（防止点击通知后的竞态条件）
-      if (_navigatingToRoomId != null && _navigatingToRoomId == roomId) {
+      if (_isAppResumed && _navigatingToRoomId != null && _navigatingToRoomId == roomId) {
         Logs().d('[AliyunPush] User is navigating to this room, skip notification');
         setBadgeNumber(badge);
         return;
@@ -488,14 +519,14 @@ class AliyunPushService {
 
       // 检查用户是否在当前房间
       final activeRoomId = activeRoomIdGetter?.call();
-      if (activeRoomId != null && activeRoomId == roomId) {
+      if (_isAppResumed && activeRoomId != null && activeRoomId == roomId) {
         Logs().d('[AliyunPush] User is in current room, skip notification');
         setBadgeNumber(badge);
         return;
       }
 
       // 检查用户是否正在导航到该房间（防止点击通知后的竞态条件）
-      if (_navigatingToRoomId != null && _navigatingToRoomId == roomId) {
+      if (_isAppResumed && _navigatingToRoomId != null && _navigatingToRoomId == roomId) {
         Logs().d('[AliyunPush] User is navigating to this room, skip notification');
         setBadgeNumber(badge);
         return;
@@ -544,13 +575,13 @@ class AliyunPushService {
 
     // 检查用户是否在当前房间
     final activeRoomId = activeRoomIdGetter?.call();
-    if (activeRoomId != null && activeRoomId == roomId) {
+    if (_isAppResumed && activeRoomId != null && activeRoomId == roomId) {
       Logs().d('[AliyunPush] User is in current room, skip notification');
       return;
     }
 
     // 检查用户是否正在导航到该房间
-    if (_navigatingToRoomId != null && _navigatingToRoomId == roomId) {
+    if (_isAppResumed && _navigatingToRoomId != null && _navigatingToRoomId == roomId) {
       Logs().d('[AliyunPush] User is navigating to this room, skip notification');
       return;
     }
@@ -737,10 +768,15 @@ class AliyunPushService {
   Future<String?> registerPusherToBackend(String matrixUserID) async {
     if (!_initialized || _deviceId == null) {
       Logs().w('[AliyunPush] Not initialized or no device ID');
+      _audit('register backend skipped initialized=$_initialized deviceId=$_deviceId');
       return null;
     }
 
     final pushKey = _generatePushKey();
+    Logs().i('[AliyunPush] Register pusher: baseUrl=${PsygoConfig.baseUrl}, apiUrl=${PsygoConfig.apiUrl}');
+    Logs().i('[AliyunPush] Register pusher: k8sNamespace=${PsygoConfig.k8sNamespace}, gateway=$_pushGatewayUrl');
+    Logs().i('[AliyunPush] Register payload: user=$matrixUserID deviceId=${_mask(_deviceId)} pushKey=${_mask(pushKey)} appId=$_appId platform=$_platform');
+    _audit('register backend start user=$matrixUserID pushKey=${_mask(pushKey)} deviceId=${_mask(_deviceId)}');
 
     try {
       final uri = Uri.parse('${PsygoConfig.baseUrl}/api/push/register');
@@ -759,14 +795,18 @@ class AliyunPushService {
 
       final json = jsonDecode(response.body) as Map<String, dynamic>;
       if (response.statusCode == 200) {
-        Logs().i('[AliyunPush] Pusher registered to backend: pushKey=$pushKey');
+        Logs().i('[AliyunPush] Pusher registered to backend: pushKey=${_mask(pushKey)}');
+        _audit('register backend ok status=${response.statusCode}');
         return pushKey;
       } else {
-        Logs().e('[AliyunPush] Register pusher failed: ${json['error']}');
+        final errorMsg = json['error']?.toString() ?? 'unknown';
+        Logs().e('[AliyunPush] Register pusher failed: status=${response.statusCode} error=$errorMsg body=${_truncate(response.body)}');
+        _audit('register backend failed status=${response.statusCode} error=$errorMsg');
         return null;
       }
     } catch (e, s) {
       Logs().e('[AliyunPush] Register pusher exception', e, s);
+      _audit('register backend exception $e');
       return null;
     }
   }
@@ -783,8 +823,12 @@ class AliyunPushService {
   /// Matrix 的 append=false 只删除相同 pushkey 的 pusher，无法清理 app_id 相同但 pushkey 不同的旧记录。
   Future<bool> registerPusherToSynapse(Client client, String pushKey) async {
     try {
+      Logs().i('[AliyunPush] Register pusher to Synapse: homeserver=${PsygoConfig.matrixHomeserver}');
+      Logs().i('[AliyunPush] Register pusher to Synapse: pushKey=${_mask(pushKey)} appId=$_appId gateway=$_pushGatewayUrl');
+      _audit('register synapse start pushKey=${_mask(pushKey)}');
       // Step 1: 获取当前所有 pusher
       final existingPushers = await client.getPushers();
+      Logs().i('[AliyunPush] Existing pushers: ${existingPushers?.length ?? 0}');
 
       // Step 2: 删除同一 app_id 的旧 pusher
       for (final pusher in existingPushers ?? []) {
@@ -821,9 +865,11 @@ class AliyunPushService {
       );
 
       Logs().i('[AliyunPush] Pusher registered to Synapse: pushKey=$pushKey');
+      _audit('register synapse ok');
       return true;
     } catch (e, s) {
       Logs().e('[AliyunPush] Register pusher to Synapse failed', e, s);
+      _audit('register synapse exception $e');
       return false;
     }
   }
@@ -836,18 +882,23 @@ class AliyunPushService {
   Future<bool> registerPush(Client client) async {
     if (!_initialized || _deviceId == null) {
       Logs().w('[AliyunPush] Not initialized or no device ID');
+      _audit('registerPush skipped initialized=$_initialized deviceId=$_deviceId');
       return false;
     }
 
     final matrixUserID = client.userID;
     if (matrixUserID == null) {
       Logs().w('[AliyunPush] User not logged in');
+      _audit('registerPush skipped user not logged in');
       return false;
     }
+
+    _audit('registerPush start user=$matrixUserID');
 
     // Step 1: 注册到后端
     final pushKey = await registerPusherToBackend(matrixUserID);
     if (pushKey == null) {
+      _audit('registerPush abort: backend failed');
       return false;
     }
 
