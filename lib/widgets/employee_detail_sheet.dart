@@ -631,24 +631,12 @@ class _EmployeeDetailSheetState extends State<EmployeeDetailSheet> {
       );
     }
 
-    // 根据计算后的 work_status 判断状态
-    Color statusColor;
-    String statusText;
-
-    switch (employee.computedWorkStatus) {
-      case 'working':
-        statusColor = Colors.green;
-        statusText = '💼 ${l10n.employeeWorking}';
-        break;
-      case 'idle_long':
-        statusColor = Colors.blue;
-        statusText = '😴 ${l10n.employeeSleeping}';
-        break;
-      case 'idle':
-      default:
-        statusColor = Colors.orange;
-        statusText = '🐟 ${l10n.employeeSlacking}';
-    }
+    // 根据 loop 状态判断工作/休息
+    final isWorking = employee.isWorking;
+    final statusColor = isWorking ? Colors.green : Colors.blue;
+    final statusText = isWorking
+        ? '💼 ${l10n.employeeWorking}'
+        : '😴 ${l10n.employeeSleeping}';
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
