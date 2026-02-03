@@ -232,6 +232,19 @@
             android:name="xiaomi_appkey"
             android:value="\ ${XIAOMI_APP_KEY}" />
 
+        <!-- 荣耀推送厂商通道 -->
+        <meta-data
+            android:name="com.hihonor.push.app_id"
+            android:value="${HONOR_APP_ID}" />
+
+        <!-- OPPO 推送厂商通道 -->
+        <meta-data
+            android:name="com.heytap.msp.push.app_key"
+            android:value="${OPPO_APP_KEY}" />
+        <meta-data
+            android:name="com.heytap.msp.push.app_secret"
+            android:value="${OPPO_APP_SECRET}" />
+
         <!-- 阿里云推送消息接收器 -->
         <receiver
             android:name="com.aliyun.ams.push.AliyunPushMessageReceiver"
