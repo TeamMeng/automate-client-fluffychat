@@ -6,6 +6,8 @@ import 'package:flutter/widgets.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:http/http.dart' as http;
 import 'package:matrix/matrix.dart';
+import 'package:psygo/config/app_config.dart';
+import 'package:psygo/config/setting_keys.dart';
 import 'package:psygo/core/config.dart';
 
 /// 阿里云移动推送服务
@@ -616,13 +618,15 @@ class AliyunPushService {
     int badge = 0,
   }) async {
     // Android 通知详情
-    const androidDetails = AndroidNotificationDetails(
-      'matrix_messages', // channel id
-      '消息通知', // channel name
+    final androidDetails = AndroidNotificationDetails(
+      AppConfig.pushNotificationsChannelId,
+      '消息通知',
       channelDescription: 'Matrix 消息通知',
       importance: Importance.high,
       priority: Priority.high,
       icon: 'notifications_icon',
+      category: AndroidNotificationCategory.message,
+      styleInformation: BigTextStyleInformation(body),
     );
 
     // iOS 通知详情
@@ -761,6 +765,50 @@ class AliyunPushService {
     return '${_platform}_${_deviceId ?? 'unknown'}';
   }
 
+  Future<void> _reconcileStoredPushKey() async {
+    if (_deviceId == null) return;
+
+    await AppSettings.init();
+
+    final cachedDeviceId = AppSettings.aliyunPushDeviceId.value;
+    final cachedPushKey = AppSettings.aliyunPushPushKey.value;
+    final currentPushKey = _generatePushKey();
+
+    final pushKeyChanged =
+        cachedPushKey.isNotEmpty && cachedPushKey != currentPushKey;
+    final deviceIdChanged =
+        cachedDeviceId.isNotEmpty && cachedDeviceId != _deviceId;
+
+    if (pushKeyChanged || deviceIdChanged) {
+      Logs().i('[AliyunPush] Cached push key mismatch, cleaning up old registration');
+      _audit(
+        'pushKey mismatch old=${_mask(cachedPushKey)} new=${_mask(currentPushKey)} '
+        'deviceIdOld=${_mask(cachedDeviceId)} deviceIdNew=${_mask(_deviceId)}',
+      );
+      if (cachedPushKey.isNotEmpty) {
+        final ok = await unregisterPush(cachedPushKey);
+        if (ok) {
+          Logs().i('[AliyunPush] Old push key unregistered: ${_mask(cachedPushKey)}');
+          await AppSettings.aliyunPushPushKey.setItem('');
+        } else {
+          Logs().w('[AliyunPush] Failed to unregister old push key: ${_mask(cachedPushKey)}');
+        }
+      }
+    }
+
+    if (cachedDeviceId != _deviceId) {
+      await AppSettings.aliyunPushDeviceId.setItem(_deviceId!);
+    }
+  }
+
+  Future<void> _persistPushRegistration(String pushKey) async {
+    if (_deviceId == null) return;
+
+    await AppSettings.init();
+    await AppSettings.aliyunPushDeviceId.setItem(_deviceId!);
+    await AppSettings.aliyunPushPushKey.setItem(pushKey);
+  }
+
   /// 注册推送到 automate-assistant 后端
   ///
   /// [matrixUserID] Matrix 用户 ID（如 @username:localhost）
@@ -895,12 +943,16 @@ class AliyunPushService {
 
     _audit('registerPush start user=$matrixUserID');
 
+    await _reconcileStoredPushKey();
+
     // Step 1: 注册到后端
     final pushKey = await registerPusherToBackend(matrixUserID);
     if (pushKey == null) {
       _audit('registerPush abort: backend failed');
       return false;
     }
+
+    await _persistPushRegistration(pushKey);
 
     // Step 2: 注册到 Synapse
     return await registerPusherToSynapse(client, pushKey);
