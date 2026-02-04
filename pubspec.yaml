@@ -122,6 +122,8 @@ flutter_native_splash:
 flutter_launcher_icons:
   android: true
   ios: true
+  remove_alpha_ios: true
+  image_path_ios: "assets/logo_macos.png"
   macos:
     generate: true
     image_path: "assets/logo_macos.png"
