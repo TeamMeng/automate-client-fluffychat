@@ -66,6 +66,16 @@ class _MxcImageState extends State<MxcImage> {
     _imageDataCache.clear();
   }
 
+  /// 清除指定 URL 的图片缓存
+  static void _evictImageCache(String url) {
+    try {
+      final imageProvider = NetworkImage(url);
+      imageProvider.evict();
+    } catch (_) {
+      // 忽略清除失败
+    }
+  }
+
   Uint8List? get _imageData => widget.cacheKey == null
       ? _imageDataNoCache
       : _imageDataCache[widget.cacheKey];
@@ -214,10 +224,11 @@ class _MxcImageState extends State<MxcImage> {
   Widget build(BuildContext context) {
     // 普通 HTTP/HTTPS URL 使用 CustomNetworkImage（包含 ISRG X1 证书）
     if (_isHttpUrl) {
+      final imageUrl = widget.uri.toString();
       return ClipRRect(
         borderRadius: widget.borderRadius,
         child: CustomNetworkImage(
-          widget.uri.toString(),
+          imageUrl,
           width: widget.width,
           height: widget.height,
           fit: widget.fit,
@@ -226,7 +237,9 @@ class _MxcImageState extends State<MxcImage> {
             return placeholder(context);
           },
           errorBuilder: (context, e, s) {
-            Logs().d('Unable to load network image', e, s);
+            Logs().d('Unable to load network image: $imageUrl', e, s);
+            // 清除失败图片的缓存，避免下次继续显示错误
+            _evictImageCache(imageUrl);
             return placeholder(context);
           },
         ),
@@ -265,6 +278,11 @@ class _MxcImageState extends State<MxcImage> {
                   gaplessPlayback: true,
                   errorBuilder: (context, e, s) {
                     Logs().d('Unable to render mxc image', e, s);
+                    // 清除损坏的图片缓存，避免下次继续显示错误
+                    final cacheKey = widget.cacheKey;
+                    if (cacheKey != null) {
+                      _imageDataCache.remove(cacheKey);
+                    }
                     return SizedBox(
                       width: widget.width,
                       height: widget.height,

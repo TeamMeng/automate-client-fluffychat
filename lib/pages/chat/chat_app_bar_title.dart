@@ -44,13 +44,29 @@ class _ChatAppBarTitleState extends State<ChatAppBarTitle> {
   void initState() {
     super.initState();
     _initEmployeeStatus();
+    // 监听 AgentService 变化，员工数据加载完成后刷新头像
+    AgentService.instance.agentsNotifier.addListener(_onAgentsChanged);
   }
 
   @override
   void dispose() {
+    AgentService.instance.agentsNotifier.removeListener(_onAgentsChanged);
     _stopPolling();
     _repository.dispose();
     super.dispose();
+  }
+
+  void _onAgentsChanged() {
+    if (!mounted) return;
+    final directChatMatrixID = controller.room.directChatMatrixID;
+    if (directChatMatrixID == null) return;
+
+    // AgentService 更新后，尝试从缓存获取最新员工数据
+    final cachedEmployee = AgentService.instance.getAgentByMatrixUserId(directChatMatrixID);
+    if (cachedEmployee != null && _employee?.agentId == cachedEmployee.agentId) {
+      // 如果是同一员工，更新数据（可能包含新的 avatarUrl）
+      setState(() => _employee = cachedEmployee);
+    }
   }
 
   /// 初始化员工状态
@@ -189,15 +205,13 @@ class _ChatAppBarTitleState extends State<ChatAppBarTitle> {
     if (directChatMatrixID != null) {
       // 优先使用已加载的员工数据（来自轮询 API，数据更新）
       if (_employee != null && _employee!.avatarUrl != null && _employee!.avatarUrl!.isNotEmpty) {
-        try {
-          final avatarUri = Uri.parse(_employee!.avatarUrl!);
+        final avatarUri = AgentService.instance.parseAvatarUri(_employee!.avatarUrl);
+        if (avatarUri != null) {
           return Avatar(
             mxContent: avatarUri,
             name: _employee!.displayName,
             size: 32,
           );
-        } catch (_) {
-          // URI 解析失败，继续 fallback
         }
       }
       // 其次从 AgentService 缓存获取员工头像
