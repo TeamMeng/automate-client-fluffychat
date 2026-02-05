@@ -22,6 +22,7 @@ import 'package:psygo/utils/client_manager.dart';
 import 'package:psygo/utils/init_with_restore.dart';
 import 'package:psygo/utils/matrix_sdk_extensions/matrix_file_extension.dart';
 import 'package:psygo/utils/platform_infos.dart';
+import 'package:psygo/utils/push_state_reporter.dart';
 import 'package:psygo/utils/uia_request_manager.dart';
 import 'package:psygo/utils/voip_plugin.dart';
 import 'package:psygo/utils/window_service.dart';
@@ -216,6 +217,30 @@ class MatrixState extends State<Matrix> with WidgetsBindingObserver {
     return route.split('/')[2];
   }
 
+  void _onRouteChanged() {
+    _updatePushState();
+  }
+
+  void _updatePushState() {
+    if (!PlatformInfos.isMobile) return;
+    final currentClient = clientOrNull;
+    if (currentClient == null || !currentClient.isLogged()) return;
+    final matrixUserId = currentClient.userID;
+    if (matrixUserId == null || matrixUserId.isEmpty) return;
+
+    final lifecycle = WidgetsBinding.instance.lifecycleState;
+    final isForeground =
+        lifecycle == null || lifecycle == AppLifecycleState.resumed;
+
+    PushStateReporter.instance.updateState(
+      isForeground: isForeground,
+      activeRoomId: activeRoomId,
+      matrixUserId: matrixUserId,
+      deviceId: AliyunPushService.instance.deviceId,
+      pushKey: AliyunPushService.instance.pushKey,
+    );
+  }
+
   final linuxNotifications =
       PlatformInfos.isLinux ? NotificationsClient() : null;
   final Map<String, int> linuxNotificationIds = {};
@@ -224,7 +249,11 @@ class MatrixState extends State<Matrix> with WidgetsBindingObserver {
   void initState() {
     super.initState();
     WidgetsBinding.instance.addObserver(this);
+    if (PlatformInfos.isMobile) {
+      PsygoApp.router.routeInformationProvider.addListener(_onRouteChanged);
+    }
     initMatrix();
+    _updatePushState();
   }
 
   void _registerSubs(String name) {
@@ -290,6 +319,7 @@ class MatrixState extends State<Matrix> with WidgetsBindingObserver {
         if (PlatformInfos.isMobile) {
           _registerAliyunPushAfterLogin(c);
         }
+        _updatePushState();
       }
       if (loggedInWithMultipleClients && state != LoginState.loggedIn) {
         ScaffoldMessenger.of(
@@ -500,6 +530,7 @@ class MatrixState extends State<Matrix> with WidgetsBindingObserver {
           } else {
             Logs().w('[Matrix] Push registration failed');
           }
+          _updatePushState();
         }
       } else {
         Logs().w('[Matrix] Aliyun Push initialization failed');
@@ -569,6 +600,7 @@ class MatrixState extends State<Matrix> with WidgetsBindingObserver {
           print('[PUSH_AUDIT] Matrix register after login failed');
         }
       }
+      _updatePushState();
     } catch (e, s) {
       Logs().e('[Matrix] Register Aliyun Push after login error', e, s);
       if (kReleaseMode) {
@@ -591,11 +623,16 @@ class MatrixState extends State<Matrix> with WidgetsBindingObserver {
         Logs().v('Set background sync to', foreground);
       }
     }
+    _updatePushState();
   }
 
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    if (PlatformInfos.isMobile) {
+      PsygoApp.router.routeInformationProvider.removeListener(_onRouteChanged);
+      PushStateReporter.instance.stop();
+    }
 
     // 修复：使用 forEach 而不是 map，因为 map 是惰性的不会立即执行
     for (final sub in onRoomKeyRequestSub.values) {

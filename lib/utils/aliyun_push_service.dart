@@ -99,6 +99,9 @@ class AliyunPushService {
   /// 获取设备 ID（推送 token）
   String? get deviceId => _deviceId;
 
+  /// 获取 pushKey（用于服务端状态上报）
+  String? get pushKey => _deviceId == null ? null : _generatePushKey();
+
   /// 是否已初始化
   bool get isInitialized => _initialized;
 
