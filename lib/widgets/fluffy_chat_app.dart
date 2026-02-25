@@ -60,6 +60,7 @@ class PsygoApp extends StatelessWidget {
     return ThemeBuilder(
       builder: (context, themeMode, primaryColor) => MaterialApp.router(
         title: AppSettings.applicationName.value,
+        debugShowCheckedModeBanner: false,
         themeMode: themeMode,
         theme: FluffyThemes.buildTheme(context, Brightness.light, primaryColor),
         darkTheme:
@@ -138,6 +139,7 @@ class _AutomateAuthGateState extends State<_AutomateAuthGate>
   bool _hasRetriedMatrixLogin = false;  // Track if we already retried Matrix login
   int _resumeRetryCount = 0;  // Track resume retry attempts to avoid infinite loops
   static const int _maxResumeRetries = 3;  // Max retries on resume
+  bool _suppressResumeAutoRetry = false;  // Stop auto retry for persistent Matrix init errors
   static const Set<String> _oneClickFallbackCodes = {
     '600002', // Auth page failed to present
     '600004', // Operator config fetch failed
@@ -165,6 +167,7 @@ class _AutomateAuthGateState extends State<_AutomateAuthGate>
   StreamSubscription? _syncStatusSubscription;
   int _consecutiveSyncErrors = 0;
   static const int _maxConsecutiveSyncErrors = 5;  // 连续5次同步失败后登出
+  Timer? _authStateRecheckTimer;
 
   // 保存 auth 引用，避免在 dispose 中访问 context
   PsygoAuthState? _authState;
@@ -179,6 +182,8 @@ class _AutomateAuthGateState extends State<_AutomateAuthGate>
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _authStateRecheckTimer?.cancel();
+    _authStateRecheckTimer = null;
     // 取消同步状态监听
     _syncStatusSubscription?.cancel();
     // 移除认证状态监听（使用保存的引用，避免访问 context）
@@ -199,6 +204,14 @@ class _AutomateAuthGateState extends State<_AutomateAuthGate>
 
     if (auth.isLoggedIn && _forceManualLogin) {
       _forceManualLogin = false;
+    }
+
+    // 在错误/手动登录状态下，未登录时不做自动轮询，避免日志风暴。
+    // 但如果已经登录（例如手动登录刚完成），必须继续执行后续逻辑，
+    // 否则 _state 会卡在 needsLogin，移动端会一直显示加载页。
+    if ((_state == _AuthState.error || _state == _AuthState.needsLogin) &&
+        !auth.isLoggedIn) {
+      return;
     }
 
     // 登出时重置状态并清除 Matrix
@@ -224,15 +237,20 @@ class _AutomateAuthGateState extends State<_AutomateAuthGate>
         if (matrix.client.isLogged()) {
           debugPrint('[AuthGate] User logged in with Matrix, updating state to authenticated');
           setState(() => _state = _AuthState.authenticated);
+          _authStateRecheckTimer?.cancel();
+          _authStateRecheckTimer = null;
           _startAgreementCheckService();
           // 启动同步状态监听，检测持续连接失败
           _startSyncStatusMonitoring(matrix.client);
         } else {
-          // Matrix 还没登录完成，稍后再检查
-          debugPrint('[AuthGate] Psygo logged in but Matrix not yet, will check again');
-          Future.delayed(const Duration(milliseconds: 500), () {
-            if (mounted) _onAuthStateChanged();
-          });
+          // Matrix 还没登录完成，限流轮询，避免并发定时器叠加
+          if (!(_authStateRecheckTimer?.isActive ?? false)) {
+            debugPrint('[AuthGate] Psygo logged in but Matrix not yet, will check again');
+            _authStateRecheckTimer = Timer(const Duration(milliseconds: 500), () {
+              _authStateRecheckTimer = null;
+              if (mounted) _onAuthStateChanged();
+            });
+          }
         }
       } catch (e) {
         debugPrint('[AuthGate] Could not check Matrix state: $e');
@@ -350,6 +368,10 @@ class _AutomateAuthGateState extends State<_AutomateAuthGate>
       // iOS FIX: Handle permission approval during auth check
       // When user slowly approves network permissions, SDK initialization may timeout
       // Auto-retry when app resumes after permission approval (with retry limit)
+      if (_state == _AuthState.error && _suppressResumeAutoRetry) {
+        debugPrint('[AuthGate] Auto retry suppressed for current error, waiting for manual action');
+        return;
+      }
       if (_state == _AuthState.error && _resumeRetryCount < _maxResumeRetries) {
         debugPrint('[AuthGate] In error state, retrying auth check after resume (attempt ${_resumeRetryCount + 1}/$_maxResumeRetries)');
         _resumeRetryCount++;
@@ -428,6 +450,13 @@ class _AutomateAuthGateState extends State<_AutomateAuthGate>
 
       // On mobile only, directly trigger one-click login
       if (PlatformInfos.isMobile && !_hasTriedAuth) {
+        if (PlatformInfos.isIOSSimulator) {
+          debugPrint('[AuthGate] iOS simulator detected, skipping one-click login and using manual login');
+          _forceManualLogin = true;
+          setState(() => _state = _AuthState.needsLogin);
+          _redirectToManualLoginPage();
+          return;
+        }
         _hasTriedAuth = true;
         await _performDirectLogin();
       } else {
@@ -533,6 +562,13 @@ class _AutomateAuthGateState extends State<_AutomateAuthGate>
 
     // On mobile only, directly trigger one-click login
     if (!_hasTriedAuth) {
+      if (PlatformInfos.isIOSSimulator) {
+        debugPrint('[AuthGate] iOS simulator detected, skipping one-click login and using manual login');
+        _forceManualLogin = true;
+        setState(() => _state = _AuthState.needsLogin);
+        _redirectToManualLoginPage();
+        return;
+      }
       _hasTriedAuth = true;
       await _performDirectLogin();
     } else {
@@ -678,10 +714,18 @@ class _AutomateAuthGateState extends State<_AutomateAuthGate>
 
     try {
       final matrix = Matrix.of(context);
+      final targetClientName = ClientManager.userIdToClientName(matrixUserId);
 
       // 使用用户专属的 client（基于 Matrix 用户 ID 命名数据库）
       // 这样每个用户都有独立的数据库，切换账号时不会有脏数据
-      final client = await ClientManager.getOrCreateClientForUser(
+      Client? client;
+      for (final existing in widget.clients) {
+        if (existing.clientName == targetClientName) {
+          client = existing;
+          break;
+        }
+      }
+      client ??= await ClientManager.getOrCreateClientForUser(
         matrixUserId,
         widget.store,
       );
@@ -691,8 +735,8 @@ class _AutomateAuthGateState extends State<_AutomateAuthGate>
       debugPrint('[AuthGate] Client isLogged: ${client.isLogged()}');
       debugPrint('[AuthGate] Client deviceID: ${client.deviceID}');
 
-      // 确保 client 在 clients 列表中
-      if (!widget.clients.contains(client)) {
+      // 按 clientName 去重，避免失败重试时不断叠加实例
+      if (!widget.clients.any((c) => c.clientName == client!.clientName)) {
         widget.clients.add(client);
         debugPrint('[AuthGate] Client added to clients list, length=${widget.clients.length}');
       }
@@ -730,7 +774,7 @@ class _AutomateAuthGateState extends State<_AutomateAuthGate>
         // CRITICAL: Ensure client is in the clients list after successful login
         // client.init(newToken:...) may not trigger onLoginStateChanged event,
         // so we need to explicitly add the client to the list here
-        if (!widget.clients.contains(client)) {
+        if (!widget.clients.any((c) => c.clientName == client!.clientName)) {
           widget.clients.add(client);
           debugPrint('[AuthGate] Client added to clients list, length=${widget.clients.length}');
         } else {
@@ -776,7 +820,7 @@ class _AutomateAuthGateState extends State<_AutomateAuthGate>
       debugPrint('[AuthGate] Client already logged in with correct userID=${client.userID}, deviceID=${client.deviceID}');
 
       // Ensure client is in the clients list
-      if (!widget.clients.contains(client)) {
+      if (!widget.clients.any((c) => c.clientName == client!.clientName)) {
         widget.clients.add(client);
         debugPrint('[AuthGate] Client added to clients list (already logged in), length=${widget.clients.length}');
       }
@@ -833,6 +877,9 @@ class _AutomateAuthGateState extends State<_AutomateAuthGate>
           errorStr.contains('Connection refused') ||
           errorStr.contains('SocketException')) {
         debugPrint('[AuthGate] Matrix encryption/network error');
+        _suppressResumeAutoRetry = true;
+        _authStateRecheckTimer?.cancel();
+        _authStateRecheckTimer = null;
 
         setState(() {
           _state = _AuthState.error;
@@ -1071,6 +1118,7 @@ class _AutomateAuthGateState extends State<_AutomateAuthGate>
       _hasTriedAuth = false;  // 允许一键登录重新触发
       _hasRetriedMatrixLogin = false;
       _resumeRetryCount = 0;
+      _suppressResumeAutoRetry = false;
     });
 
     // 移动端：设置延迟登录标志，等待 app 回到前台后再触发一键登录
@@ -1156,6 +1204,7 @@ class _AutomateAuthGateState extends State<_AutomateAuthGate>
       _hasTriedAuth = false;
       _hasRetriedMatrixLogin = false;
       _resumeRetryCount = 0;
+      _suppressResumeAutoRetry = false;
     });
 
     // 移动端：设置延迟登录标志，等待 app 回到前台后再触发一键登录
@@ -1460,6 +1509,7 @@ class _AutomateAuthGateState extends State<_AutomateAuthGate>
                                 _hasTriedAuth = false;
                                 _hasRetriedMatrixLogin = false;
                                 _resumeRetryCount = 0;
+                                _suppressResumeAutoRetry = false;
                               });
                               _checkAuthStateSafe();
                             },
@@ -1488,6 +1538,7 @@ class _AutomateAuthGateState extends State<_AutomateAuthGate>
                               _hasTriedAuth = false;
                               _hasRetriedMatrixLogin = false;
                               _resumeRetryCount = 0;
+                              _suppressResumeAutoRetry = false;
                             });
                             _checkAuthStateSafe();
                           },
@@ -1549,6 +1600,7 @@ class _AutomateAuthGateState extends State<_AutomateAuthGate>
                         _hasTriedAuth = false;
                         _hasRetriedMatrixLogin = false;
                         _resumeRetryCount = 0;  // Reset retry counter
+                        _suppressResumeAutoRetry = false;
                       });
                       _checkAuthStateSafe();
                     },
@@ -1575,6 +1627,7 @@ class _AutomateAuthGateState extends State<_AutomateAuthGate>
                           _hasTriedAuth = false;
                           _hasRetriedMatrixLogin = false;
                           _resumeRetryCount = 0;  // Reset retry counter
+                          _suppressResumeAutoRetry = false;
                         });
                         _checkAuthStateSafe();
                       },

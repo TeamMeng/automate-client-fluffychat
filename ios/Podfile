@@ -54,91 +54,41 @@ post_install do |installer|
       File.open(xcconfig_path, "w") { |file| file << new_xcconfig }
 
       config.build_settings['ENABLE_BITCODE'] = 'NO'
-
-      # see https://github.com/flutter-webrtc/flutter-webrtc/issues/1054
       config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = '13.0'
-      config.build_settings["EXCLUDED_ARCHS[sdk=iphonesimulator*]"] = 'arm64 i386'
+      config.build_settings["EXCLUDED_ARCHS[sdk=iphonesimulator*]"] = 'i386'
 
       config.build_settings['GCC_PREPROCESSOR_DEFINITIONS'] ||= [
         '$(inherited)',
-        # dart: PermissionGroup.microphone
         'PERMISSION_MICROPHONE=1',
       ]
 
-      # 阿里云推送 SDK 需要 -ObjC linker flag
       config.build_settings['OTHER_LDFLAGS'] ||= ['$(inherited)']
       unless config.build_settings['OTHER_LDFLAGS'].include?('-ObjC')
         config.build_settings['OTHER_LDFLAGS'] << '-ObjC'
-      end
-
-      # Flutter 3.38+ uses "Flutter" framework; replace legacy "Flutter-ObjC" if present.
-      other_ldflags = config.build_settings['OTHER_LDFLAGS']
-      case other_ldflags
-      when Array
-        config.build_settings['OTHER_LDFLAGS'] = other_ldflags.map do |flag|
-          flag == 'Flutter-ObjC' ? 'Flutter' : flag
-        end
-      when String
-        config.build_settings['OTHER_LDFLAGS'] = other_ldflags.gsub('Flutter-ObjC', 'Flutter')
       end
     end
   end
   flutter_post_install(installer) if defined?(flutter_post_install)
 
-  # 修复 Flutter-ObjC 引用问题 (Flutter 3.38.x bug)
-  # 方案1：修复当前的 Pods 项目
+  # 修复 Flutter 3.38+ 的 Flutter-ObjC 引用问题
+  installer.pods_project.targets.each do |target|
+    target.build_configurations.each do |config|
+      other_ldflags = config.build_settings['OTHER_LDFLAGS']
+      if other_ldflags.is_a?(Array)
+        config.build_settings['OTHER_LDFLAGS'] = other_ldflags.map { |f| f == 'Flutter-ObjC' ? 'Flutter' : f }
+      elsif other_ldflags.is_a?(String)
+        config.build_settings['OTHER_LDFLAGS'] = other_ldflags.gsub('Flutter-ObjC', 'Flutter')
+      end
+    end
+  end
+
   pbxproj_path = "#{installer.pods_project.path}/project.pbxproj"
   if File.exist?(pbxproj_path)
     text = File.read(pbxproj_path)
-    count = text.scan(/Flutter-ObjC/).length
-    if count > 0
-      new_text = text.gsub(/Flutter-ObjC/, 'Flutter')
-      File.write(pbxproj_path, new_text)
-      puts "✅ 已自动修复 Flutter-ObjC 引用 (#{count} 处)"
-    else
-      puts "✅ Flutter-ObjC 无需修复"
+    if text.include?('Flutter-ObjC')
+      File.write(pbxproj_path, text.gsub('Flutter-ObjC', 'Flutter'))
+      puts "✅ 已修复 Flutter-ObjC 引用"
     end
   end
 
-  # 方案2：添加 Xcode Build Phase 脚本，在编译前自动修复
-  # 这样即使 Flutter 工具链重新生成 Flutter-ObjC 引用，也会被自动修复
-  project_path = 'Runner.xcodeproj'
-  project = Xcodeproj::Project.open(project_path)
-
-  runner_target = project.targets.find { |target| target.name == 'Runner' }
-  if runner_target
-    # 检查是否已经存在修复脚本
-    existing_phase = runner_target.shell_script_build_phases.find do |phase|
-      phase.name == 'Fix Flutter-ObjC'
-    end
-
-    unless existing_phase
-      # 添加新的 Build Phase 在 "Run Script" (xcode_backend.sh) 之后
-      fix_phase = runner_target.new_shell_script_build_phase('Fix Flutter-ObjC')
-      fix_phase.shell_script = <<~SCRIPT
-        # 自动修复 Flutter 3.38.x 的 Flutter-ObjC bug
-        PBXPROJ="${PODS_ROOT}/../Pods/Pods.xcodeproj/project.pbxproj"
-        if [ -f "$PBXPROJ" ]; then
-          if grep -q "Flutter-ObjC" "$PBXPROJ"; then
-            sed -i '' 's/Flutter-ObjC/Flutter/g' "$PBXPROJ"
-            echo "✅ Auto-fixed Flutter-ObjC references in build phase"
-          fi
-        fi
-      SCRIPT
-      fix_phase.show_env_vars_in_log = '0'
-
-      # 将这个 phase 移动到 "Run Script" 之后
-      run_script_phase = runner_target.shell_script_build_phases.find { |phase| phase.name == 'Run Script' }
-      if run_script_phase
-        runner_target.build_phases.delete(fix_phase)
-        run_script_index = runner_target.build_phases.index(run_script_phase)
-        runner_target.build_phases.insert(run_script_index + 1, fix_phase)
-      end
-
-      project.save
-      puts "✅ 已添加自动修复 Build Phase，每次编译前都会自动修复 Flutter-ObjC"
-    else
-      puts "✅ 自动修复 Build Phase 已存在"
-    end
-  end
 end

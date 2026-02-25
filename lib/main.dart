@@ -4,6 +4,7 @@ import 'dart:io';
 import 'dart:isolate';
 import 'dart:ui';
 import 'package:collection/collection.dart';
+import 'package:flutter/foundation.dart' show kReleaseMode;
 import 'package:flutter/material.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'package:path_provider/path_provider.dart';
@@ -196,10 +197,17 @@ class _IosStartupAppState extends State<_IosStartupApp> {
     Logs().i('Welcome to ${AppSettings.applicationName.value} <3');
     developer.log('[iOS Startup] AppSettings initialized', name: 'Startup');
 
-    developer.log('[iOS Startup] Initializing vodozemac...', name: 'Startup');
-    await vod.init(wasmPath: './assets/assets/vodozemac/');
+    if (PlatformInfos.isIOS && !kReleaseMode) {
+      developer.log(
+        '[iOS Startup] Skipping vodozemac in iOS debug mode',
+        name: 'Startup',
+      );
+    } else {
+      developer.log('[iOS Startup] Initializing vodozemac...', name: 'Startup');
+      await vod.init(wasmPath: './assets/assets/vodozemac/');
+      developer.log('[iOS Startup] Vodozemac initialized', name: 'Startup');
+    }
     Logs().nativeColors = false;
-    developer.log('[iOS Startup] Vodozemac initialized', name: 'Startup');
 
     developer.log('[iOS Startup] Getting Matrix clients (timeout: 45s)...', name: 'Startup');
     final clients = await ClientManager.getClients(store: store)
