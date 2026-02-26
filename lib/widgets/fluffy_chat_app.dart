@@ -221,12 +221,13 @@ class _AutomateAuthGateState extends State<_AutomateAuthGate>
       // 检查 Matrix 是否也已登录
       try {
         final matrix = Matrix.of(context);
-        if (matrix.client.isLogged()) {
+        final client = matrix.clientOrNull;
+        if (client != null && client.isLogged()) {
           debugPrint('[AuthGate] User logged in with Matrix, updating state to authenticated');
           setState(() => _state = _AuthState.authenticated);
           _startAgreementCheckService();
           // 启动同步状态监听，检测持续连接失败
-          _startSyncStatusMonitoring(matrix.client);
+          _startSyncStatusMonitoring(client);
         } else {
           // Matrix 还没登录完成，稍后再检查
           debugPrint('[AuthGate] Psygo logged in but Matrix not yet, will check again');
