@@ -742,11 +742,10 @@ class EmployeesTabState extends State<EmployeesTab>
             icon: Icons.people_outline,
             title: l10n.noEmployeesYet,
             subtitle: l10n.noEmployeesHint,
-            actionLabel: l10n.hireFirstEmployee,
-            onAction: () {
-              // 切换到招聘 Tab
-              widget.onNavigateToRecruit?.call();
-            },
+            actionLabel: widget.onNavigateToRecruit == null
+                ? null
+                : l10n.hireFirstEmployee,
+            onAction: widget.onNavigateToRecruit,
           ),
         ),
       );
