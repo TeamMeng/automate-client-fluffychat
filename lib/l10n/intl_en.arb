@@ -3514,6 +3514,8 @@
   "@employeeSlackingHint": {},
   "employeeSleepingHint": "Waking the employee may take a moment.",
   "@employeeSleepingHint": {},
+  "agentWebEntryUnavailable": "This employee currently has no web entry available.",
+  "@agentWebEntryUnavailable": {},
   "employeeOnboarding": "Onboarding...",
   "@employeeOnboarding": {},
   "employeeReady": "Ready",

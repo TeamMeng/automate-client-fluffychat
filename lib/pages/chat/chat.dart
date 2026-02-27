@@ -186,8 +186,9 @@ class ChatController extends State<ChatPageWithRoom>
     if (_webEntryLoading) return;
 
     if (!agent.webEntryEnabled) {
+      final l10n = L10n.of(context);
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('该 Agent 尚未开启 Web 入口')),
+        SnackBar(content: Text(l10n.agentWebEntryUnavailable)),
       );
       return;
     }
@@ -858,8 +859,7 @@ class ChatController extends State<ChatPageWithRoom>
       setState(() => _syncPendingAttachmentOrderControllers());
       return;
     }
-    final clamped = parsedIndex
-        .clamp(1, _pendingAttachments.length) as int;
+    final clamped = parsedIndex.clamp(1, _pendingAttachments.length);
     final newIndex = clamped - 1;
     if (newIndex == currentIndex) {
       setState(() => _syncPendingAttachmentOrderControllers());
@@ -1584,7 +1584,7 @@ class ChatController extends State<ChatPageWithRoom>
     }
     await scrollController.scrollToIndex(
       eventIndex + 1,
-      duration: FluffyThemes.animationDuration,
+      duration: FluffyThemes.durationFast,
       preferPosition: AutoScrollPosition.middle,
     );
     _updateScrollController();

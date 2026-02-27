@@ -3370,5 +3370,7 @@
     "employeeSlackingHint": "可隨時安排工作",
     "@employeeSlackingHint": {},
     "employeeSleepingHint": "喚醒員工需要一些時間",
-    "@employeeSleepingHint": {}
+    "@employeeSleepingHint": {},
+    "agentWebEntryUnavailable": "該員工當前未開放入口",
+    "@agentWebEntryUnavailable": {}
 }
