@@ -56,10 +56,11 @@ mixin LoginFlowMixin<T extends StatefulWidget> on State<T> {
       final matrix = Matrix.of(context);
       final store = await SharedPreferences.getInstance();
 
-      // 使用用户专属的 client（基于 Matrix 用户 ID 命名数据库）
-      final client = await ClientManager.getOrCreateClientForUser(
+      // 使用用户专属 client。登录链路优先复用内存对象，避免重复 initWithRestore。
+      final client = await ClientManager.getOrCreateLoginClientForUser(
         matrixUserId,
         store,
+        inMemoryClients: matrix.widget.clients,
       );
 
       // 确保 client 在 clients 列表中
@@ -89,9 +90,8 @@ mixin LoginFlowMixin<T extends StatefulWidget> on State<T> {
       // 清除旧内存状态
       await client.clear();
 
-      // Set homeserver before login
+      // 使用固定 homeserver，直接 init，避免额外探测请求带来的登录卡顿。
       final homeserverUrl = Uri.parse(PsygoConfig.matrixHomeserver);
-      await client.checkHomeserver(homeserverUrl);
 
       // 使用后端返回的 access_token 直接初始化，无需密码登录
       await client.init(
@@ -99,6 +99,9 @@ mixin LoginFlowMixin<T extends StatefulWidget> on State<T> {
         newUserID: matrixUserId,
         newHomeserver: homeserverUrl,
         newDeviceName: PlatformInfos.clientName,
+        // Do not block UI on first sync/load; background sync continues after init.
+        waitForFirstSync: false,
+        waitUntilLoadCompletedLoaded: false,
       );
       debugPrint('Matrix 登录成功');
 

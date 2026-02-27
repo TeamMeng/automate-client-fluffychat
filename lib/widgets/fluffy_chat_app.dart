@@ -221,12 +221,21 @@ class _AutomateAuthGateState extends State<_AutomateAuthGate>
       // 检查 Matrix 是否也已登录
       try {
         final matrix = Matrix.of(context);
-        if (matrix.client.isLogged()) {
+        Client? loggedInClient;
+        for (final client in matrix.widget.clients) {
+          if (client.isLogged()) {
+            loggedInClient = client;
+            break;
+          }
+        }
+
+        if (loggedInClient != null) {
           debugPrint('[AuthGate] User logged in with Matrix, updating state to authenticated');
+          matrix.setActiveClient(loggedInClient);
           setState(() => _state = _AuthState.authenticated);
           _startAgreementCheckService();
           // 启动同步状态监听，检测持续连接失败
-          _startSyncStatusMonitoring(matrix.client);
+          _startSyncStatusMonitoring(loggedInClient);
         } else {
           // Matrix 还没登录完成，稍后再检查
           debugPrint('[AuthGate] Psygo logged in but Matrix not yet, will check again');
@@ -675,11 +684,11 @@ class _AutomateAuthGateState extends State<_AutomateAuthGate>
     try {
       final matrix = Matrix.of(context);
 
-      // 使用用户专属的 client（基于 Matrix 用户 ID 命名数据库）
-      // 这样每个用户都有独立的数据库，切换账号时不会有脏数据
-      final client = await ClientManager.getOrCreateClientForUser(
+      // 使用用户专属 client。登录链路优先复用内存对象，避免重复 initWithRestore。
+      final client = await ClientManager.getOrCreateLoginClientForUser(
         matrixUserId,
         widget.store,
+        inMemoryClients: widget.clients,
       );
 
       debugPrint('[AuthGate] Client database: ${client.database}');
@@ -707,10 +716,9 @@ class _AutomateAuthGateState extends State<_AutomateAuthGate>
         // Clear old data before login (仅清除内存状态，数据库保留)
         await client.clear();
 
-        // Set homeserver before login
+        // 使用固定 homeserver，直接 init，避免额外探测请求带来的登录卡顿。
         final homeserverUrl = Uri.parse(PsygoConfig.matrixHomeserver);
         debugPrint('[AuthGate] Setting homeserver: $homeserverUrl');
-        await client.checkHomeserver(homeserverUrl);
 
         debugPrint('[AuthGate] Attempting Matrix login: matrixUserId=$matrixUserId');
 
@@ -720,6 +728,9 @@ class _AutomateAuthGateState extends State<_AutomateAuthGate>
           newUserID: matrixUserId,
           newHomeserver: homeserverUrl,
           newDeviceName: PlatformInfos.clientName,
+          // Do not block UI on first sync/load; background sync continues after init.
+          waitForFirstSync: false,
+          waitUntilLoadCompletedLoaded: false,
         );
         debugPrint('[AuthGate] Matrix login success, deviceID=${client.deviceID}');
 
