@@ -30,6 +30,9 @@ class TeamPageController extends State<TeamPage>
     _tabController = TabController(length: 3, vsync: this);
     // 监听 tab 变化以更新图标状态
     _tabController.addListener(_onTabChanged);
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _notifyEmployeesTabVisibility();
+    });
   }
 
   @override
@@ -42,8 +45,13 @@ class TeamPageController extends State<TeamPage>
   void _onTabChanged() {
     // 仅用于刷新图标状态，不需要手动同步 PageView
     if (!_tabController.indexIsChanging) {
+      _notifyEmployeesTabVisibility();
       setState(() {});
     }
+  }
+
+  void _notifyEmployeesTabVisibility() {
+    _employeesTabKey.currentState?.onTabVisibilityChanged(_tabController.index == 0);
   }
 
   /// Switch to Employees tab and refresh the list
