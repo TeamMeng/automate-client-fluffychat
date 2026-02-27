@@ -106,6 +106,7 @@ class _ChatAppBarTitleState extends State<ChatAppBarTitle> {
       final page = await _repository.getUserAgents(limit: 50);
       final agent = page.agents.where((a) => a.matrixUserId == matrixUserId).firstOrNull;
       if (mounted && agent != null) {
+        AgentService.instance.updateAgent(agent);
         setState(() => _employee = agent);
         _startPolling(agent.agentId);
       }
@@ -140,6 +141,7 @@ class _ChatAppBarTitleState extends State<ChatAppBarTitle> {
       final page = await _repository.getUserAgents(limit: 50);
       final agent = page.agents.where((a) => a.agentId == agentId).firstOrNull;
       if (mounted && agent != null) {
+        AgentService.instance.updateAgent(agent);
         setState(() => _employee = agent);
       }
     } catch (_) {}

@@ -523,7 +523,7 @@ class EmployeesTabState extends State<EmployeesTab>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('${l10n.errorStartingChat}: $e'),
+            content: Text(l10n.errorStartingChat),
             behavior: SnackBarBehavior.floating,
           ),
         );
@@ -644,7 +644,7 @@ class EmployeesTabState extends State<EmployeesTab>
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('${L10n.of(context).errorDeletingEmployee}: $e'),
+            content: Text(L10n.of(context).errorDeletingEmployee),
             behavior: SnackBarBehavior.floating,
           ),
         );
