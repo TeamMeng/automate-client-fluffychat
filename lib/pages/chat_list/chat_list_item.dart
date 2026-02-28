@@ -11,12 +11,10 @@ import 'package:psygo/services/agent_service.dart';
 import 'package:psygo/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:psygo/utils/room_status_extension.dart';
 import 'package:psygo/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
-import 'package:psygo/widgets/custom_network_image.dart';
 import 'package:psygo/widgets/future_loading_dialog.dart';
 import 'package:psygo/widgets/hover_builder.dart';
 import '../../config/themes.dart';
 import '../../utils/date_time_extension.dart';
-import '../../utils/string_color.dart';
 import '../../widgets/avatar.dart';
 
 enum ArchivedRoomAction { delete, rejoin }
