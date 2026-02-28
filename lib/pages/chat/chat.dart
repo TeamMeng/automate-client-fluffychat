@@ -152,6 +152,8 @@ class ChatController extends State<ChatPageWithRoom>
   bool _webEntryOpen = false;
   bool _webEntryLoading = false;
   String? _webEntryUrl;
+  DateTime? _lastWebEntryHintAt;
+  static const Duration _webEntryHintCooldown = Duration(seconds: 2);
 
   bool get webEntryOpen => _webEntryOpen;
   bool get webEntryLoading => _webEntryLoading;
@@ -167,6 +169,17 @@ class ChatController extends State<ChatPageWithRoom>
   bool get _supportsInlineWebView {
     if (kIsWeb) return false;
     return Platform.isAndroid || Platform.isIOS || Platform.isMacOS;
+  }
+
+  bool _shouldThrottleWebEntryHint() {
+    final now = DateTime.now();
+    final lastHintAt = _lastWebEntryHintAt;
+    if (lastHintAt != null &&
+        now.difference(lastHintAt) < _webEntryHintCooldown) {
+      return true;
+    }
+    _lastWebEntryHintAt = now;
+    return false;
   }
 
   void closeWebEntry() {
@@ -188,6 +201,9 @@ class ChatController extends State<ChatPageWithRoom>
 
     if (!agent.canOpenWebEntry) {
       final l10n = L10n.of(context);
+      if (_shouldThrottleWebEntryHint()) {
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(l10n.agentWebEntryUnavailable),
@@ -224,6 +240,9 @@ class ChatController extends State<ChatPageWithRoom>
       _markWebEntryUpdateViewed(agent);
     } catch (_) {
       if (!mounted || requestId != _webEntryRequestId) return;
+      if (_shouldThrottleWebEntryHint()) {
+        return;
+      }
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(content: Text(l10n.chatOpenFailedRetryLater)),
       );
@@ -872,7 +891,7 @@ class ChatController extends State<ChatPageWithRoom>
       setState(() => _syncPendingAttachmentOrderControllers());
       return;
     }
-    final clamped = parsedIndex.clamp(1, _pendingAttachments.length) as int;
+    final clamped = parsedIndex.clamp(1, _pendingAttachments.length);
     final newIndex = clamped - 1;
     if (newIndex == currentIndex) {
       setState(() => _syncPendingAttachmentOrderControllers());

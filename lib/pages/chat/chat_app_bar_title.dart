@@ -44,6 +44,8 @@ class _ChatAppBarTitleState extends State<ChatAppBarTitle> {
   /// 轮询定时器
   Timer? _pollingTimer;
   int _previewCycleIndex = 0;
+  DateTime? _lastStatusHintAt;
+  static const Duration _statusHintCooldown = Duration(seconds: 2);
 
   /// 轮询间隔
   static const _pollingInterval = Duration(seconds: 10);
@@ -345,6 +347,14 @@ class _ChatAppBarTitleState extends State<ChatAppBarTitle> {
     BuildContext context,
     String hint,
   ) async {
+    final now = DateTime.now();
+    final lastHintAt = _lastStatusHintAt;
+    if (lastHintAt != null &&
+        now.difference(lastHintAt) < _statusHintCooldown) {
+      return;
+    }
+    _lastStatusHintAt = now;
+
     final messenger = ScaffoldMessenger.maybeOf(context);
     messenger
       ?..hideCurrentSnackBar()
