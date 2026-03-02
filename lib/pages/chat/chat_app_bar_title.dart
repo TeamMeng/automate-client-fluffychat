@@ -26,11 +26,26 @@ class ChatAppBarTitle extends StatefulWidget {
 }
 
 class _ChatAppBarTitleState extends State<ChatAppBarTitle> {
+  /// 开发预览：
+  /// --dart-define=PREVIEW_EMPLOYEE_STATUS=cycle
+  ///   在 UI 中显示切换按钮，可循环预览多种状态
+  static const String _previewEmployeeStatus =
+      String.fromEnvironment('PREVIEW_EMPLOYEE_STATUS', defaultValue: '');
+  static const List<String> _previewStatusCycleModes = <String>[
+    'auto',
+    'working',
+    'slacking',
+    'resting',
+  ];
+
   /// 员工信息（如果对方是员工）
   Agent? _employee;
 
   /// 轮询定时器
   Timer? _pollingTimer;
+  int _previewCycleIndex = 0;
+  DateTime? _lastStatusHintAt;
+  static const Duration _statusHintCooldown = Duration(seconds: 2);
 
   /// 轮询间隔
   static const _pollingInterval = Duration(seconds: 10);
@@ -44,13 +59,29 @@ class _ChatAppBarTitleState extends State<ChatAppBarTitle> {
   void initState() {
     super.initState();
     _initEmployeeStatus();
+    // 监听 AgentService 变化，员工数据加载完成后刷新头像
+    AgentService.instance.agentsNotifier.addListener(_onAgentsChanged);
   }
 
   @override
   void dispose() {
+    AgentService.instance.agentsNotifier.removeListener(_onAgentsChanged);
     _stopPolling();
     _repository.dispose();
     super.dispose();
+  }
+
+  void _onAgentsChanged() {
+    if (!mounted) return;
+    final directChatMatrixID = controller.room.directChatMatrixID;
+    if (directChatMatrixID == null) return;
+
+    // AgentService 更新后，尝试从缓存获取最新员工数据
+    final cachedEmployee = AgentService.instance.getAgentByMatrixUserId(directChatMatrixID);
+    if (cachedEmployee != null && _employee?.agentId == cachedEmployee.agentId) {
+      // 如果是同一员工，更新数据（可能包含新的 avatarUrl）
+      setState(() => _employee = cachedEmployee);
+    }
   }
 
   /// 初始化员工状态
@@ -77,6 +108,7 @@ class _ChatAppBarTitleState extends State<ChatAppBarTitle> {
       final page = await _repository.getUserAgents(limit: 50);
       final agent = page.agents.where((a) => a.matrixUserId == matrixUserId).firstOrNull;
       if (mounted && agent != null) {
+        AgentService.instance.updateAgent(agent);
         setState(() => _employee = agent);
         _startPolling(agent.agentId);
       }
@@ -111,6 +143,7 @@ class _ChatAppBarTitleState extends State<ChatAppBarTitle> {
       final page = await _repository.getUserAgents(limit: 50);
       final agent = page.agents.where((a) => a.agentId == agentId).firstOrNull;
       if (mounted && agent != null) {
+        AgentService.instance.updateAgent(agent);
         setState(() => _employee = agent);
       }
     } catch (_) {}
@@ -129,54 +162,79 @@ class _ChatAppBarTitleState extends State<ChatAppBarTitle> {
     }
 
     final theme = Theme.of(context);
-    return InkWell(
-      hoverColor: Colors.transparent,
-      splashColor: Colors.transparent,
-      highlightColor: Colors.transparent,
-      borderRadius: BorderRadius.circular(12),
-      onTap: controller.isArchived
-          ? null
-          : () => FluffyThemes.isThreeColumnMode(context)
-              ? controller.toggleDisplayChatDetailsColumn()
-              : context.go('/rooms/${room.id}/details'),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 4),
-        child: Row(
-          children: [
-            Hero(
+    final showPreviewStatusButton = _isInteractivePreviewEnabled &&
+        room.directChatMatrixID != null &&
+        _employee != null;
+    final onProfileTap = controller.isArchived
+        ? null
+        : () => FluffyThemes.isThreeColumnMode(context)
+            ? controller.toggleDisplayChatDetailsColumn()
+            : context.go('/rooms/${room.id}/details');
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: Row(
+        children: [
+          InkWell(
+            hoverColor: Colors.transparent,
+            splashColor: Colors.transparent,
+            highlightColor: Colors.transparent,
+            borderRadius: BorderRadius.circular(12),
+            onTap: onProfileTap,
+            child: Hero(
               tag: 'content_banner',
               child: _buildAvatar(room, context),
             ),
-            const SizedBox(width: 12),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  Text(
-                    room.getLocalizedDisplayname(MatrixLocals(L10n.of(context))),
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: TextStyle(
-                      fontSize: 16,
-                      fontWeight: FontWeight.w600,
-                      color: theme.colorScheme.onSurface,
-                      letterSpacing: -0.2,
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      fit: FlexFit.loose,
+                      child: InkWell(
+                        hoverColor: Colors.transparent,
+                        splashColor: Colors.transparent,
+                        highlightColor: Colors.transparent,
+                        borderRadius: BorderRadius.circular(8),
+                        onTap: onProfileTap,
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(vertical: 2),
+                          child: Text(
+                            room.getLocalizedDisplayname(MatrixLocals(L10n.of(context))),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            style: TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                              color: theme.colorScheme.onSurface,
+                              letterSpacing: -0.2,
+                            ),
+                          ),
+                        ),
+                      ),
                     ),
-                  ),
-                  const SizedBox(height: 2),
-                  // 私聊：显示员工工作状态或在线状态
-                  // 群聊：不显示状态
-                  room.directChatMatrixID != null
-                      ? (_employee != null
-                          ? _buildEmployeeWorkStatus(context, _employee!)
-                          : _buildPresenceStatus(context, room))
-                      : const SizedBox.shrink(),
-                ],
-              ),
+                    if (showPreviewStatusButton) ...[
+                      const SizedBox(width: 6),
+                      _buildPreviewStatusButton(context),
+                    ],
+                  ],
+                ),
+                const SizedBox(height: 2),
+                // 私聊：显示员工工作状态或在线状态
+                // 群聊：不显示状态
+                room.directChatMatrixID != null
+                    ? (_employee != null
+                        ? _buildEmployeeWorkStatus(context, _employee!)
+                        : _buildPresenceStatus(context, room))
+                    : const SizedBox.shrink(),
+              ],
             ),
-          ],
-        ),
+          ),
+        ],
       ),
     );
   }
@@ -187,7 +245,18 @@ class _ChatAppBarTitleState extends State<ChatAppBarTitle> {
 
     // 如果是私聊，获取对方用户的头像
     if (directChatMatrixID != null) {
-      // 优先使用员工头像
+      // 优先使用已加载的员工数据（来自轮询 API，数据更新）
+      if (_employee != null && _employee!.avatarUrl != null && _employee!.avatarUrl!.isNotEmpty) {
+        final avatarUri = AgentService.instance.parseAvatarUri(_employee!.avatarUrl);
+        if (avatarUri != null) {
+          return Avatar(
+            mxContent: avatarUri,
+            name: _employee!.displayName,
+            size: 32,
+          );
+        }
+      }
+      // 其次从 AgentService 缓存获取员工头像
       final agentAvatarUri = AgentService.instance.getAgentAvatarUri(directChatMatrixID);
       if (agentAvatarUri != null) {
         final agent = AgentService.instance.getAgentByMatrixUserId(directChatMatrixID);
@@ -221,13 +290,11 @@ class _ChatAppBarTitleState extends State<ChatAppBarTitle> {
   /// 构建员工工作状态显示
   Widget _buildEmployeeWorkStatus(BuildContext context, Agent employee) {
     final l10n = L10n.of(context);
-    final theme = Theme.of(context);
 
-    final isWorking = employee.isWorking;
-    final statusText = isWorking
-        ? '💼 ${l10n.employeeWorking}'
-        : '😴 ${l10n.employeeSleeping}';
-    final dotColor = isWorking ? Colors.green : Colors.blue;
+    final status = _resolveDisplayedWorkStatus(employee.computedWorkStatus);
+    final statusText = _getWorkStatusText(l10n, status);
+    final statusHint = _getWorkStatusHint(l10n, status);
+    final dotColor = _getWorkStatusColor(status);
 
     return Row(
       mainAxisSize: MainAxisSize.min,
@@ -248,16 +315,161 @@ class _ChatAppBarTitleState extends State<ChatAppBarTitle> {
           ),
         ),
         const SizedBox(width: 6),
-        Text(
-          statusText,
-          style: TextStyle(
-            fontSize: 12,
-            color: theme.colorScheme.onSurfaceVariant,
-            fontWeight: FontWeight.w400,
+        Flexible(
+          child: InkWell(
+            onTap: () => _showFullStatusHint(context, statusHint),
+            borderRadius: BorderRadius.circular(999),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: dotColor.withAlpha(30),
+                borderRadius: BorderRadius.circular(999),
+              ),
+              child: Text(
+                statusText,
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                style: TextStyle(
+                  fontSize: 11,
+                  color: dotColor,
+                  fontWeight: FontWeight.w600,
+                  height: 1.1,
+                ),
+              ),
+            ),
           ),
         ),
       ],
     );
+  }
+
+  Future<void> _showFullStatusHint(
+    BuildContext context,
+    String hint,
+  ) async {
+    final now = DateTime.now();
+    final lastHintAt = _lastStatusHintAt;
+    if (lastHintAt != null &&
+        now.difference(lastHintAt) < _statusHintCooldown) {
+      return;
+    }
+    _lastStatusHintAt = now;
+
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    messenger
+      ?..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          content: Text(hint),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+        ),
+      );
+  }
+
+  String _getWorkStatusText(L10n l10n, String status) {
+    switch (status) {
+      case 'working':
+        return '💼 ${l10n.employeeWorking}';
+      case 'slacking':
+        return '🐟 ${l10n.employeeSlacking}';
+      default:
+        return '😴 ${l10n.employeeSleeping}';
+    }
+  }
+
+  String _resolveDisplayedWorkStatus(String fallbackStatus) {
+    if (_isInteractivePreviewEnabled) {
+      final mode = _previewStatusCycleModes[_previewCycleIndex];
+      return mode == 'auto' ? fallbackStatus : mode;
+    }
+    return fallbackStatus;
+  }
+
+  bool get _isInteractivePreviewEnabled =>
+      _previewEmployeeStatus.trim().toLowerCase() == 'cycle';
+
+  void _cyclePreviewStatus() {
+    setState(() {
+      _previewCycleIndex = (_previewCycleIndex + 1) % _previewStatusCycleModes.length;
+    });
+  }
+
+  String _previewStatusLabel(L10n l10n, String status) {
+    switch (status) {
+      case 'working':
+        return l10n.employeeWorking;
+      case 'slacking':
+        return l10n.employeeSlacking;
+      case 'resting':
+        return l10n.employeeSleeping;
+      default:
+        return 'AUTO';
+    }
+  }
+
+  Widget _buildPreviewStatusButton(BuildContext context) {
+    final theme = Theme.of(context);
+    final l10n = L10n.of(context);
+    final currentMode = _previewStatusCycleModes[_previewCycleIndex];
+    final label = _previewStatusLabel(l10n, currentMode);
+
+    return Tooltip(
+      message: '预览状态: $label（点击切换）',
+      child: InkWell(
+        borderRadius: BorderRadius.circular(8),
+        onTap: _cyclePreviewStatus,
+        child: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 2),
+          decoration: BoxDecoration(
+            color: theme.colorScheme.surfaceContainerHigh,
+            borderRadius: BorderRadius.circular(8),
+            border: Border.all(color: theme.colorScheme.outlineVariant),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Icon(
+                Icons.tune_rounded,
+                size: 10,
+                color: theme.colorScheme.outline,
+              ),
+              const SizedBox(width: 3),
+              Text(
+                label,
+                style: TextStyle(
+                  fontSize: 10,
+                  color: theme.colorScheme.outline,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  String _getWorkStatusHint(L10n l10n, String status) {
+    switch (status) {
+      case 'working':
+        return l10n.employeeWorkingHint;
+      case 'slacking':
+        return l10n.employeeSlackingHint;
+      default:
+        return l10n.employeeSleepingHint;
+    }
+  }
+
+  Color _getWorkStatusColor(String status) {
+    switch (status) {
+      case 'working':
+        return Colors.green;
+      case 'slacking':
+        return Colors.blue;
+      default:
+        return Colors.blueGrey;
+    }
   }
 
   /// 构建原有的在线状态显示
@@ -272,7 +484,7 @@ class _ChatAppBarTitleState extends State<ChatAppBarTitle> {
                 status.status != SyncStatus.error &&
                 room.client.prevBatch != null);
         return AnimatedSize(
-          duration: FluffyThemes.animationDuration,
+          duration: FluffyThemes.durationFast,
           child: hide
               ? PresenceBuilder(
                   userId: room.directChatMatrixID,

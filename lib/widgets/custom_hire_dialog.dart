@@ -4,15 +4,17 @@ import 'package:flutter/material.dart';
 
 import 'package:psygo/l10n/l10n.dart';
 
+import '../core/api_client.dart';
 import '../models/plugin.dart';
 import '../models/hire_result.dart';
 import '../repositories/agent_template_repository.dart';
 import '../repositories/plugin_repository.dart';
+import '../utils/localized_exception_extension.dart';
 import 'custom_network_image.dart';
 import 'dicebear_avatar_picker.dart';
 
 /// 定制招聘向导（三步）
-/// 第1步：基本信息（名称 + 邀请码）
+/// 第1步：基本信息（名称）
 /// 第2步：选择插件（多选）
 /// 第3步：配置插件（如有需要）
 class CustomHireDialog extends StatefulWidget {
@@ -35,7 +37,6 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
 
   // 表单控制器
   final TextEditingController _nameController = TextEditingController();
-  final TextEditingController _invitationCodeController = TextEditingController();
   final FocusNode _nameFocusNode = FocusNode();
 
   // 插件相关
@@ -63,7 +64,10 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
       !_isNameTooLong;
   bool get _isNameNumericOnly =>
       _nameController.text.isNotEmpty &&
-      _nameController.text.trim().split('').every((c) => '0123456789'.contains(c));
+      _nameController.text
+          .trim()
+          .split('')
+          .every((c) => '0123456789'.contains(c));
   bool get _isNameTooLong =>
       _nameController.text.trim().length > _maxNameLength;
   @override
@@ -94,14 +98,14 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
     ];
     final style = styles[random.nextInt(styles.length)];
     const chars = 'abcdefghijklmnopqrstuvwxyz0123456789';
-    final seed = List.generate(8, (_) => chars[random.nextInt(chars.length)]).join();
+    final seed =
+        List.generate(8, (_) => chars[random.nextInt(chars.length)]).join();
     _avatarUrl = 'https://api.dicebear.com/9.x/$style/png?seed=$seed&size=256';
   }
 
   @override
   void dispose() {
     _nameController.dispose();
-    _invitationCodeController.dispose();
     _nameFocusNode.dispose();
     _pluginRepository.dispose();
     // 清理所有配置控制器
@@ -131,7 +135,10 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
     } catch (e) {
       if (mounted) {
         setState(() {
-          _pluginError = e.toString();
+          _pluginError = e.toLocalizedString(
+            context,
+            ExceptionContext.customHireEmployee,
+          );
           _isLoadingPlugins = false;
         });
       }
@@ -180,7 +187,9 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
       if (_selectedPlugins.contains(plugin.name)) {
         _selectedPlugins.remove(plugin.name);
         // 清理配置控制器
-        _pluginConfigControllers[plugin.name]?.values.forEach((c) => c.dispose());
+        _pluginConfigControllers[plugin.name]
+            ?.values
+            .forEach((c) => c.dispose());
         _pluginConfigControllers.remove(plugin.name);
       } else {
         _selectedPlugins.add(plugin.name);
@@ -227,7 +236,8 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
     final result = <String, dynamic>{};
     for (final entry in schema.entries) {
       // 跳过 JSON Schema 元字段
-      if (['type', 'required', '\$schema', 'title', 'description'].contains(entry.key)) {
+      if (['type', 'required', '\$schema', 'title', 'description']
+          .contains(entry.key)) {
         continue;
       }
       if (entry.value is Map && (entry.value as Map)['type'] != null) {
@@ -238,7 +248,8 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
   }
 
   /// 获取必填字段列表（兼容两种 schema 格式）
-  List<String> _getRequiredFields(Map<String, dynamic> schema, Map<String, dynamic> properties) {
+  List<String> _getRequiredFields(
+      Map<String, dynamic> schema, Map<String, dynamic> properties) {
     // 标准 JSON Schema 格式：顶层 required 数组
     final required = schema['required'];
     if (required is List) {
@@ -274,7 +285,8 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
   /// 获取需要配置的插件
   List<Plugin> get _pluginsNeedingConfig {
     return _availablePlugins
-        .where((p) => _selectedPlugins.contains(p.name) && _hasValidConfigSchema(p))
+        .where((p) =>
+            _selectedPlugins.contains(p.name) && _hasValidConfigSchema(p))
         .toList();
   }
 
@@ -296,14 +308,6 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
   /// 提交创建
   Future<void> _onSubmit() async {
     if (_isSubmitting) return;
-    final invitationCode = _invitationCodeController.text.trim();
-
-    if (invitationCode.isEmpty) {
-      setState(() {
-        _error = L10n.of(context).invitationCodeRequired;
-      });
-      return;
-    }
 
     setState(() {
       _isSubmitting = true;
@@ -319,19 +323,32 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
     }).toList();
 
     // 调用创建接口（异步），先返回 UI 结果让入职动画接管
-    final responseFuture = widget.repository.createCustomAgentWithPlugins(
-      name: _nameController.text.trim(),
-      plugins: plugins.isNotEmpty ? plugins : null,
-      invitationCode: invitationCode,
-      avatarUrl: _avatarUrl,
-    );
-
-    if (mounted) {
+    try {
+      final response = await widget.repository.createCustomAgentWithPlugins(
+        name: _nameController.text.trim(),
+        plugins: plugins.isNotEmpty ? plugins : null,
+        avatarUrl: _avatarUrl,
+      );
+      if (!mounted) return;
       Navigator.of(context).pop(HireResult(
-        responseFuture: responseFuture,
+        responseFuture: Future.value(response),
         displayName: _nameController.text.trim(),
       ));
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _error = _formatError(e);
+        _isSubmitting = false;
+      });
     }
+  }
+
+  String _formatError(Object error) {
+    if (error is ApiException) {
+      return error.message;
+    }
+    return error.toLocalizedString(
+        context, ExceptionContext.customHireEmployee);
   }
 
   @override
@@ -355,7 +372,8 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
           return Container(
             decoration: BoxDecoration(
               color: theme.colorScheme.surface,
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(28)),
             ),
             child: Column(
               children: [
@@ -369,7 +387,8 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
                       width: 40,
                       height: 4,
                       decoration: BoxDecoration(
-                        color: theme.colorScheme.onSurfaceVariant.withValues(alpha: 0.4),
+                        color: theme.colorScheme.onSurfaceVariant
+                            .withValues(alpha: 0.4),
                         borderRadius: BorderRadius.circular(2),
                       ),
                     ),
@@ -419,7 +438,8 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
           // 内容区域
           Flexible(
             child: ScrollConfiguration(
-              behavior: ScrollConfiguration.of(context).copyWith(scrollbars: false),
+              behavior:
+                  ScrollConfiguration.of(context).copyWith(scrollbars: false),
               child: SingleChildScrollView(
                 padding: const EdgeInsets.fromLTRB(24, 8, 24, 16),
                 child: _buildContent(theme, l10n),
@@ -517,7 +537,9 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
           final (label, icon) = steps[stepIndex];
 
           return GestureDetector(
-            onTap: isCompleted ? () => setState(() => _currentStep = stepIndex) : null,
+            onTap: isCompleted
+                ? () => setState(() => _currentStep = stepIndex)
+                : null,
             child: Column(
               children: [
                 AnimatedContainer(
@@ -532,7 +554,8 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
                     boxShadow: isCurrent
                         ? [
                             BoxShadow(
-                              color: theme.colorScheme.primary.withValues(alpha: 0.3),
+                              color: theme.colorScheme.primary
+                                  .withValues(alpha: 0.3),
                               blurRadius: 8,
                               spreadRadius: 1,
                             ),
@@ -624,17 +647,6 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
           showCounter: true,
         ),
         const SizedBox(height: 20),
-
-        // 邀请码
-        _buildInputField(
-          theme: theme,
-          controller: _invitationCodeController,
-          label: l10n.invitationCode,
-          hint: l10n.enterInvitationCode,
-          icon: Icons.vpn_key_outlined,
-          enabled: !_isSubmitting,
-        ),
-        const SizedBox(height: 8),
       ],
     );
   }
@@ -690,7 +702,8 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
         const SizedBox(height: 16),
 
         // 插件列表
-        ...(_availablePlugins.map((plugin) => _buildPluginItem(plugin, theme, l10n))),
+        ...(_availablePlugins
+            .map((plugin) => _buildPluginItem(plugin, theme, l10n))),
 
         // 跳过提示
         if (_selectedPlugins.isEmpty) ...[
@@ -769,7 +782,8 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
                   width: 44,
                   height: 44,
                   decoration: BoxDecoration(
-                    color: theme.colorScheme.secondaryContainer.withValues(alpha: 0.5),
+                    color: theme.colorScheme.secondaryContainer
+                        .withValues(alpha: 0.5),
                     borderRadius: BorderRadius.circular(12),
                   ),
                   child: plugin.iconUrl.isNotEmpty
@@ -778,7 +792,8 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
                           child: CustomNetworkImage(
                             plugin.iconUrl,
                             fit: BoxFit.cover,
-                            errorBuilder: (_, __, ___) => _buildPluginIconFallback(theme),
+                            errorBuilder: (_, __, ___) =>
+                                _buildPluginIconFallback(theme),
                           ),
                         )
                       : _buildPluginIconFallback(theme),
@@ -870,7 +885,8 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
                 width: 72,
                 height: 72,
                 decoration: BoxDecoration(
-                  color: theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
+                  color:
+                      theme.colorScheme.primaryContainer.withValues(alpha: 0.3),
                   shape: BoxShape.circle,
                 ),
                 child: Icon(
@@ -940,8 +956,10 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
           Container(
             padding: const EdgeInsets.all(14),
             decoration: BoxDecoration(
-              color: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.5),
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+              color: theme.colorScheme.surfaceContainerHighest
+                  .withValues(alpha: 0.5),
+              borderRadius:
+                  const BorderRadius.vertical(top: Radius.circular(16)),
             ),
             child: Row(
               children: [
@@ -971,7 +989,8 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
                 final isRequired = requiredFields.contains(fieldName);
                 final fieldType = fieldSchema['type'] as String? ?? 'string';
                 final description = fieldSchema['description'] as String?;
-                final title = fieldSchema['title'] as String? ?? _formatFieldName(fieldName);
+                final title = fieldSchema['title'] as String? ??
+                    _formatFieldName(fieldName);
                 final controller = controllers[fieldName];
 
                 if (controller == null) return const SizedBox.shrink();
@@ -1016,9 +1035,10 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
                         vertical: 14,
                       ),
                     ),
-                    keyboardType: fieldType == 'number' || fieldType == 'integer'
-                        ? TextInputType.number
-                        : TextInputType.text,
+                    keyboardType:
+                        fieldType == 'number' || fieldType == 'integer'
+                            ? TextInputType.number
+                            : TextInputType.text,
                   ),
                 );
               }).toList(),
@@ -1107,7 +1127,8 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
               ),
             ),
             filled: true,
-            fillColor: theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.3),
+            fillColor: theme.colorScheme.surfaceContainerHighest
+                .withValues(alpha: 0.3),
             alignLabelWithHint: minLines > 1,
             contentPadding: EdgeInsets.symmetric(
               horizontal: 16,
@@ -1369,9 +1390,7 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
                       mainAxisAlignment: MainAxisAlignment.center,
                       children: [
                         Text(
-                          _currentStep < 2
-                              ? l10n.next
-                              : l10n.createEmployee,
+                          _currentStep < 2 ? l10n.next : l10n.createEmployee,
                           style: const TextStyle(fontWeight: FontWeight.w600),
                         ),
                         const SizedBox(width: 8),

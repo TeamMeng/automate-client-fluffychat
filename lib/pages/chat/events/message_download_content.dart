@@ -1,13 +1,21 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
 
 import 'package:flutter_linkify/flutter_linkify.dart';
 import 'package:matrix/matrix.dart';
+import 'package:open_file/open_file.dart';
+import 'package:path/path.dart' as path_lib;
+import 'package:path_provider/path_provider.dart';
 
 import 'package:psygo/config/app_config.dart';
 import 'package:psygo/config/setting_keys.dart';
+import 'package:psygo/l10n/l10n.dart';
 import 'package:psygo/utils/file_description.dart';
 import 'package:psygo/utils/matrix_sdk_extensions/event_extension.dart';
+import 'package:psygo/utils/platform_infos.dart';
 import 'package:psygo/utils/url_launcher.dart';
+import 'package:psygo/widgets/future_loading_dialog.dart';
 
 class MessageDownloadContent extends StatelessWidget {
   final Event event;
@@ -20,6 +28,61 @@ class MessageDownloadContent extends StatelessWidget {
     required this.linkColor,
     super.key,
   });
+
+  Future<MatrixFile?> _downloadAttachment(BuildContext context) async {
+    final result = await showFutureLoadingDialog(
+      context: context,
+      futureWithProgress: (onProgress) {
+        final fileSize = event.infoMap['size'] is int
+            ? event.infoMap['size'] as int
+            : null;
+        return event.downloadAndDecryptAttachment(
+          onDownloadProgress: fileSize == null
+              ? null
+              : (bytes) => onProgress(bytes / fileSize),
+        );
+      },
+    );
+    return result.result;
+  }
+
+  Future<void> _openFilePreview(BuildContext context) async {
+    if (PlatformInfos.isWeb) return;
+    final scaffoldMessenger = ScaffoldMessenger.of(context);
+
+    try {
+      final matrixFile = await _downloadAttachment(context);
+      if (matrixFile == null) return;
+
+      final fileName =
+          matrixFile.name.isNotEmpty ? matrixFile.name : 'attachment';
+      final tempDir = await getTemporaryDirectory();
+      final tempPath = path_lib.join(
+        tempDir.path,
+        '${DateTime.now().millisecondsSinceEpoch}_$fileName',
+      );
+      await File(tempPath).writeAsBytes(matrixFile.bytes, flush: true);
+
+      final result = await OpenFile.open(tempPath);
+      if (result.type != ResultType.done) {
+        final message =
+            result.message.isNotEmpty ? result.message : L10n.of(context).open;
+        scaffoldMessenger.showSnackBar(SnackBar(content: Text(message)));
+      }
+    } catch (_) {
+      scaffoldMessenger.showSnackBar(
+        SnackBar(content: Text(L10n.of(context).open)),
+      );
+    }
+  }
+
+  void _onFileCardTap(BuildContext context) {
+    if (PlatformInfos.isWeb) {
+      event.saveFile(context);
+      return;
+    }
+    _openFilePreview(context);
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -42,7 +105,7 @@ class MessageDownloadContent extends StatelessWidget {
           color: Colors.transparent,
           child: InkWell(
             borderRadius: BorderRadius.circular(AppConfig.borderRadius / 2),
-            onTap: () => event.saveFile(context),
+            onTap: () => _onFileCardTap(context),
             child: Container(
               width: 400,
               padding: const EdgeInsets.all(16.0),
@@ -52,7 +115,7 @@ class MessageDownloadContent extends StatelessWidget {
                 children: [
                   CircleAvatar(
                     backgroundColor: textColor.withAlpha(32),
-                    child: Icon(Icons.file_download_outlined, color: textColor),
+                    child: Icon(Icons.visibility_outlined, color: textColor),
                   ),
                   Flexible(
                     child: Column(
@@ -76,6 +139,12 @@ class MessageDownloadContent extends StatelessWidget {
                         ),
                       ],
                     ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.file_download_outlined),
+                    color: textColor,
+                    tooltip: L10n.of(context).downloadFile,
+                    onPressed: () => event.saveFile(context),
                   ),
                 ],
               ),

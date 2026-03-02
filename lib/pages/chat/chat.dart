@@ -16,14 +16,19 @@ import 'package:matrix/matrix.dart';
 import 'package:mime/mime.dart';
 import 'package:scroll_to_index/scroll_to_index.dart';
 import 'package:universal_html/html.dart' as html;
+import 'package:url_launcher/url_launcher.dart';
 
 import 'package:psygo/config/setting_keys.dart';
 import 'package:psygo/config/themes.dart';
+import 'package:psygo/core/config.dart';
 import 'package:psygo/l10n/l10n.dart';
+import 'package:psygo/models/agent.dart';
 import 'package:psygo/pages/chat/chat_view.dart';
 import 'package:psygo/pages/chat/event_info_dialog.dart';
 import 'package:psygo/pages/chat/start_poll_bottom_sheet.dart';
 import 'package:psygo/pages/chat_details/chat_details.dart';
+import 'package:psygo/repositories/agent_repository.dart';
+import 'package:psygo/services/agent_service.dart';
 import 'package:psygo/utils/adaptive_bottom_sheet.dart';
 import 'package:psygo/utils/error_reporter.dart';
 import 'package:psygo/utils/fluffy_share.dart';
@@ -102,8 +107,8 @@ class PendingAttachment {
     required this.id,
     required this.file,
     String? caption,
-  }) : captionController = TextEditingController(text: caption ?? ''),
-       orderController = TextEditingController();
+  })  : captionController = TextEditingController(text: caption ?? ''),
+        orderController = TextEditingController();
 
   final String id;
   final XFile file;
@@ -139,6 +144,121 @@ class ChatController extends State<ChatPageWithRoom>
   Timer? typingTimeout;
   bool currentlyTyping = false;
   bool dragging = false;
+  late final VoidCallback _agentServiceListener;
+
+  // Agent Web entry (reverse-tunnel) state.
+  final AgentRepository _webEntryRepository = AgentRepository();
+  int _webEntryRequestId = 0;
+  bool _webEntryOpen = false;
+  bool _webEntryLoading = false;
+  String? _webEntryUrl;
+  DateTime? _lastWebEntryHintAt;
+  static const Duration _webEntryHintCooldown = Duration(seconds: 2);
+
+  bool get webEntryOpen => _webEntryOpen;
+  bool get webEntryLoading => _webEntryLoading;
+  String? get webEntryUrl => _webEntryUrl;
+
+  Agent? get webEntryAgent {
+    final directChatMatrixID = room.directChatMatrixID;
+    return AgentService.instance.getAgentByMatrixUserId(directChatMatrixID);
+  }
+
+  bool get canOpenWebEntry => webEntryAgent?.canOpenWebEntry == true;
+
+  bool get _supportsInlineWebView {
+    if (kIsWeb) return false;
+    return Platform.isAndroid || Platform.isIOS || Platform.isMacOS;
+  }
+
+  bool _shouldThrottleWebEntryHint() {
+    final now = DateTime.now();
+    final lastHintAt = _lastWebEntryHintAt;
+    if (lastHintAt != null &&
+        now.difference(lastHintAt) < _webEntryHintCooldown) {
+      return true;
+    }
+    _lastWebEntryHintAt = now;
+    return false;
+  }
+
+  void closeWebEntry() {
+    // Invalidate any in-flight open request so it can't "re-open" later.
+    _webEntryRequestId++;
+    if (!_webEntryOpen && !_webEntryLoading && _webEntryUrl == null) return;
+    setState(() {
+      _webEntryOpen = false;
+      _webEntryLoading = false;
+      _webEntryUrl = null;
+    });
+  }
+
+  Future<void> openWebEntry() async {
+    final agent = webEntryAgent;
+    if (agent == null) return;
+    if (_webEntryLoading) return;
+    final l10n = L10n.of(context);
+
+    if (!agent.canOpenWebEntry) {
+      final l10n = L10n.of(context);
+      if (_shouldThrottleWebEntryHint()) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(l10n.agentWebEntryUnavailable),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+      return;
+    }
+
+    final requestId = ++_webEntryRequestId;
+    setState(() => _webEntryLoading = true);
+
+    try {
+      final path = await _webEntryRepository.getWebEntryUrl(agent.agentId);
+      if (!mounted || requestId != _webEntryRequestId) return;
+
+      final base = PsygoConfig.baseUrl.replaceAll(RegExp(r'/+$'), '');
+      final fullUrl = base + path;
+      final uri = Uri.tryParse(fullUrl);
+      if (uri == null) {
+        throw Exception('Invalid web entry url');
+      }
+
+      if (!_supportsInlineWebView) {
+        await launchUrl(uri, mode: LaunchMode.externalApplication);
+        _markWebEntryUpdateViewed(agent);
+        return;
+      }
+
+      setState(() {
+        _webEntryUrl = fullUrl;
+        _webEntryOpen = true;
+      });
+      _markWebEntryUpdateViewed(agent);
+    } catch (_) {
+      if (!mounted || requestId != _webEntryRequestId) return;
+      if (_shouldThrottleWebEntryHint()) {
+        return;
+      }
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(l10n.chatOpenFailedRetryLater)),
+      );
+    } finally {
+      if (mounted && requestId == _webEntryRequestId) {
+        setState(() => _webEntryLoading = false);
+      }
+    }
+  }
+
+  void _markWebEntryUpdateViewed(Agent agent) {
+    if (!agent.hasWebEntryUpdate) return;
+    AgentService.instance.updateAgent(
+      agent.copyWith(webEntryStatus: Agent.webEntryStatusEnabled),
+    );
+  }
 
   void onDragEntered(_) => setState(() => dragging = true);
 
@@ -471,6 +591,12 @@ class ChatController extends State<ChatPageWithRoom>
   void initState() {
     inputFocus = FocusNode(onKeyEvent: _customEnterKeyHandling);
 
+    _agentServiceListener = () {
+      if (!mounted) return;
+      setState(() {});
+    };
+    AgentService.instance.agentsNotifier.addListener(_agentServiceListener);
+
     scrollController.addListener(_updateScrollController);
     inputFocus.addListener(_inputFocusListener);
 
@@ -702,6 +828,8 @@ class ChatController extends State<ChatPageWithRoom>
 
   @override
   void dispose() {
+    AgentService.instance.agentsNotifier.removeListener(_agentServiceListener);
+    _webEntryRepository.dispose();
     timeline?.cancelSubscriptions();
     timeline = null;
     inputFocus.removeListener(_inputFocusListener);
@@ -778,8 +906,7 @@ class ChatController extends State<ChatPageWithRoom>
       setState(() => _syncPendingAttachmentOrderControllers());
       return;
     }
-    final clamped = parsedIndex
-        .clamp(1, _pendingAttachments.length) as int;
+    final clamped = parsedIndex.clamp(1, _pendingAttachments.length);
     final newIndex = clamped - 1;
     if (newIndex == currentIndex) {
       setState(() => _syncPendingAttachmentOrderControllers());
@@ -856,8 +983,14 @@ class ChatController extends State<ChatPageWithRoom>
       });
 
   Future<void> send() async {
+    // If user sends a message while WebView is open, return to chat first.
+    if (_webEntryOpen || _webEntryLoading) {
+      closeWebEntry();
+    }
+
     final trimmedText = sendController.text.trim();
-    final hasPending = PlatformInfos.isDesktop && _pendingAttachments.isNotEmpty;
+    final hasPending =
+        PlatformInfos.isDesktop && _pendingAttachments.isNotEmpty;
     if (!hasPending && trimmedText.isEmpty) return;
 
     if (hasPending) {
@@ -944,7 +1077,10 @@ class ChatController extends State<ChatPageWithRoom>
         if (PlatformInfos.isMobile &&
             mimeType != null &&
             mimeType.startsWith('video')) {
-          _showLoadingSnackBar(scaffoldMessenger, l10n.generatingVideoThumbnail);
+          _showLoadingSnackBar(
+            scaffoldMessenger,
+            l10n.generatingVideoThumbnail,
+          );
           thumbnail = await xfile.getVideoThumbnail();
           _showLoadingSnackBar(scaffoldMessenger, l10n.compressVideo);
           file = await xfile.getVideoInfo(
@@ -1499,7 +1635,7 @@ class ChatController extends State<ChatPageWithRoom>
     }
     await scrollController.scrollToIndex(
       eventIndex + 1,
-      duration: FluffyThemes.animationDuration,
+      duration: FluffyThemes.durationFast,
       preferPosition: AutoScrollPosition.middle,
     );
     _updateScrollController();

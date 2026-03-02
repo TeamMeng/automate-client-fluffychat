@@ -137,7 +137,7 @@ class _EmployeeDetailSheetState extends State<EmployeeDetailSheet> {
         setState(() => _isUpdatingStyle = false);
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
-            content: Text('${L10n.of(context).updateFailed}: $e'),
+            content: Text(L10n.of(context).updateFailed),
             behavior: SnackBarBehavior.floating,
             duration: const Duration(seconds: 3),
           ),
@@ -252,7 +252,7 @@ class _EmployeeDetailSheetState extends State<EmployeeDetailSheet> {
       return l10n.serverError;
     }
 
-    return '${l10n.errorStartingChat}: ${e.toString().split('\n').first}';
+    return l10n.serverError;
   }
 
   @override
@@ -289,18 +289,18 @@ class _EmployeeDetailSheetState extends State<EmployeeDetailSheet> {
                   ),
                 ],
               ),
-              child: employee.avatarUrl != null &&
-                      employee.avatarUrl!.isNotEmpty
-                  ? ClipRRect(
-                      borderRadius: BorderRadius.circular(24),
-                      child: CustomNetworkImage(
-                        employee.avatarUrl!,
-                        fit: BoxFit.cover,
-                        errorBuilder: (_, __, ___) =>
-                            _buildAvatarFallback(theme),
-                      ),
-                    )
-                  : _buildAvatarFallback(theme),
+              child:
+                  employee.avatarUrl != null && employee.avatarUrl!.isNotEmpty
+                      ? ClipRRect(
+                          borderRadius: BorderRadius.circular(24),
+                          child: CustomNetworkImage(
+                            employee.avatarUrl!,
+                            fit: BoxFit.cover,
+                            errorBuilder: (_, __, ___) =>
+                                _buildAvatarFallback(theme),
+                          ),
+                        )
+                      : _buildAvatarFallback(theme),
             ),
             const SizedBox(height: 20),
 
@@ -317,7 +317,8 @@ class _EmployeeDetailSheetState extends State<EmployeeDetailSheet> {
             // Matrix ID
             if (employee.matrixUserId != null)
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
                 decoration: BoxDecoration(
                   color: theme.colorScheme.surfaceContainerLow,
                   borderRadius: BorderRadius.circular(20),
@@ -631,12 +632,9 @@ class _EmployeeDetailSheetState extends State<EmployeeDetailSheet> {
       );
     }
 
-    // 根据 loop 状态判断工作/休息
-    final isWorking = employee.isWorking;
-    final statusColor = isWorking ? Colors.green : Colors.blue;
-    final statusText = isWorking
-        ? '💼 ${l10n.employeeWorking}'
-        : '😴 ${l10n.employeeSleeping}';
+    final status = employee.computedWorkStatus;
+    final statusColor = _getWorkStatusColor(status);
+    final statusText = _getWorkStatusText(l10n, status);
 
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
@@ -666,6 +664,28 @@ class _EmployeeDetailSheetState extends State<EmployeeDetailSheet> {
         ],
       ),
     );
+  }
+
+  String _getWorkStatusText(L10n l10n, String status) {
+    switch (status) {
+      case 'working':
+        return '💼 ${l10n.employeeWorking}';
+      case 'slacking':
+        return '🐟 ${l10n.employeeSlacking}';
+      default:
+        return '😴 ${l10n.employeeSleeping}';
+    }
+  }
+
+  Color _getWorkStatusColor(String status) {
+    switch (status) {
+      case 'working':
+        return Colors.green;
+      case 'slacking':
+        return Colors.blue;
+      default:
+        return Colors.blueGrey;
+    }
   }
 
   Widget _buildSkillsList(ThemeData theme, L10n l10n) {
@@ -722,7 +742,8 @@ class _EmployeeDetailSheetState extends State<EmployeeDetailSheet> {
           return Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
-              color: theme.colorScheme.secondaryContainer.withValues(alpha: 0.5),
+              color:
+                  theme.colorScheme.secondaryContainer.withValues(alpha: 0.5),
               borderRadius: BorderRadius.circular(16),
             ),
             child: Text(
