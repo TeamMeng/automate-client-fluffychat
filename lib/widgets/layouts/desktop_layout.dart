@@ -583,22 +583,18 @@ class _DesktopLayoutState extends State<DesktopLayout> {
               children: [
                 Container(
                   padding: const EdgeInsets.symmetric(
-                    horizontal: 14,
-                    vertical: 10,
-                  ),
-                  decoration: BoxDecoration(
-                    color: theme.colorScheme.surfaceContainerLow,
-                    borderRadius: BorderRadius.circular(14),
+                    horizontal: 22,
+                    vertical: 14,
                   ),
                   child: Row(
                     children: [
                       _PsygoBubbleLogo(
-                        size: 22,
+                        size: 30,
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(width: 10),
                       Text(
                         'Psygo',
-                        style: theme.textTheme.titleMedium?.copyWith(
+                        style: theme.textTheme.titleLarge?.copyWith(
                           fontWeight: FontWeight.w700,
                           letterSpacing: 0.2,
                         ),
@@ -705,7 +701,7 @@ class _DesktopLayoutState extends State<DesktopLayout> {
           child: Column(
             children: [
               Padding(
-                padding: const EdgeInsets.fromLTRB(16, 12, 16, 10),
+                padding: const EdgeInsets.fromLTRB(8, 6, 8, 5),
                 child: _buildTopNavigation(theme, l10n),
               ),
               Expanded(
