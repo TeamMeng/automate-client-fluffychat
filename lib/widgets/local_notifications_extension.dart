@@ -66,7 +66,7 @@ extension LocalNotificationsExtension on MatrixState {
       final iconUri = _windowsLogoUri();
       initSettings = InitializationSettings(
         windows: WindowsInitializationSettings(
-          appName: 'Psygo',
+          appName: 'PsyGo',
           appUserModelId: 'com.psygo.app',
           guid: '8af2f2bb-4f08-4ac1-824e-977080f91d42',
           iconPath: iconUri.toFilePath(),
@@ -101,9 +101,9 @@ extension LocalNotificationsExtension on MatrixState {
       var initialized = await initializeWithSettings(initSettings);
       if (!initialized && Platform.isWindows) {
         initialized = await initializeWithSettings(
-          const InitializationSettings(
+          InitializationSettings(
             windows: WindowsInitializationSettings(
-              appName: 'Psygo',
+              appName: 'PsyGo',
               appUserModelId: 'com.psygo.app',
               guid: '8af2f2bb-4f08-4ac1-824e-977080f91d42',
             ),
@@ -271,7 +271,7 @@ extension LocalNotificationsExtension on MatrixState {
             title,
             body: body,
             replacesId: replacesId,
-            appName: AppSettings.applicationName.value,
+            appName: 'PsyGo',
             appIcon: 'psygo',
             actions: notifyActions,
             hints: notifyHints,
@@ -349,7 +349,7 @@ extension LocalNotificationsExtension on MatrixState {
               images: [
                 WindowsImage(
                   iconUri,
-                  altText: 'Psygo',
+                  altText: 'PsyGo',
                   placement: WindowsImagePlacement.appLogoOverride,
                 ),
               ],
