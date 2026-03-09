@@ -3,7 +3,9 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:matrix/matrix.dart';
+import 'package:provider/provider.dart';
 
+import 'package:psygo/backend/auth_state.dart';
 import 'package:psygo/config/themes.dart';
 import 'package:psygo/l10n/l10n.dart';
 import 'package:psygo/models/hire_result.dart';
@@ -13,6 +15,7 @@ import 'package:psygo/pages/team/employees_tab.dart';
 import 'package:psygo/pages/wallet/wallet_page.dart';
 import 'package:psygo/repositories/agent_template_repository.dart';
 import 'package:psygo/services/agent_service.dart';
+import 'package:psygo/services/recruit_guide_service.dart';
 import 'package:psygo/utils/fluffy_share.dart';
 import 'package:psygo/utils/platform_infos.dart';
 import 'package:psygo/utils/window_service.dart';
@@ -170,8 +173,23 @@ class _DesktopLayoutState extends State<DesktopLayout> {
     _employeesTabKey.currentState?.refreshEmployeeList();
   }
 
+  Future<bool> _shouldShowRecruitGuide() async {
+    final userId = context.read<PsygoAuthState>().userId;
+    return RecruitGuideService.instance.shouldShowGuide(userId);
+  }
+
+  Future<void> _markRecruitGuideCompleted() async {
+    final userId = context.read<PsygoAuthState>().userId;
+    await RecruitGuideService.instance.markGuideCompleted(userId);
+  }
+
   Future<void> _openRecruitMenu() async {
     final repository = AgentTemplateRepository();
+    final showRecruitGuide = await _shouldShowRecruitGuide();
+    if (!mounted) {
+      repository.dispose();
+      return;
+    }
 
     try {
       final result = await showDialog<HireResult>(
@@ -183,6 +201,8 @@ class _DesktopLayoutState extends State<DesktopLayout> {
             child: CustomHireDialog(
               repository: repository,
               isDialog: true,
+              showRecruitGuide: showRecruitGuide,
+              onRecruitGuideCompleted: _markRecruitGuideCompleted,
             ),
           ),
         ),
