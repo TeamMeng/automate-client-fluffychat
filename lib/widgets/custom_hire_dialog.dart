@@ -166,6 +166,8 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
           responseFuture:
               widget.repository.waitCreateOperation(accepted.operationId),
           displayName: _nameController.text.trim(),
+          agentId: accepted.agentId,
+          avatarUrl: _avatarUrl,
         ),
       );
     } catch (e) {
@@ -717,15 +719,20 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
             fontWeight: FontWeight.w500,
           ) ??
           const TextStyle(
-              fontSize: 14, height: 1.45, fontWeight: FontWeight.w500),
+            fontSize: 14,
+            height: 1.45,
+            fontWeight: FontWeight.w500,
+          ),
     );
     final preferredHeight =
         18.0 + max(titleHeight, 22.0) + 14.0 + bodyHeight + 16.0 + 52.0 + 16.0;
     final minHeight = isDesktop ? 220.0 : _guideBubbleHeight;
     final maxHeight = max(
       minHeight,
-      min(isDesktop ? 320.0 : 280.0,
-          availableSize.height - (_guideScreenPadding * 2)),
+      min(
+        isDesktop ? 320.0 : 280.0,
+        availableSize.height - (_guideScreenPadding * 2),
+      ),
     );
     final height = preferredHeight.clamp(minHeight, maxHeight).toDouble();
     return Size(width, height);

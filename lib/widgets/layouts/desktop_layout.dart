@@ -24,7 +24,6 @@ import 'package:psygo/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:psygo/widgets/avatar.dart';
 import 'package:psygo/widgets/custom_hire_dialog.dart';
 import 'package:psygo/widgets/future_loading_dialog.dart';
-import 'package:psygo/widgets/hire_success_dialog.dart';
 import 'package:psygo/widgets/layouts/empty_page.dart';
 import 'package:psygo/widgets/matrix.dart';
 
@@ -171,9 +170,26 @@ class _DesktopLayoutState extends State<DesktopLayout> {
     }
   }
 
-  /// 刷新员工列表
-  void _refreshEmployeeList() {
-    _employeesTabKey.currentState?.refreshEmployeeList();
+  void _refreshEmployeeListSilently() {
+    final tabState = _employeesTabKey.currentState;
+    if (tabState == null) return;
+    unawaited(tabState.refreshEmployeeListSilently());
+  }
+
+  void _addPendingEmployeeCard({
+    required String employeeName,
+    required String agentId,
+    String? avatarUrl,
+  }) {
+    _employeesTabKey.currentState?.addPendingEmployee(
+      displayName: employeeName,
+      agentId: agentId,
+      avatarUrl: avatarUrl,
+    );
+  }
+
+  void _removePendingEmployeeCard(String agentId) {
+    _employeesTabKey.currentState?.removePendingEmployee(agentId);
   }
 
   Future<bool> _shouldShowRecruitGuide() async {
@@ -228,21 +244,20 @@ class _DesktopLayoutState extends State<DesktopLayout> {
 
       if (!mounted || result == null) return;
 
-      _refreshEmployeeList();
-      unawaited(AgentService.instance.refresh());
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(L10n.of(context).employeeOnboardingHint),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-
       final displayName = result.displayName.trim();
       final employeeName = displayName.isNotEmpty ? displayName : 'Employee';
+      _addPendingEmployeeCard(
+        employeeName: employeeName,
+        agentId: result.agentId,
+        avatarUrl: result.avatarUrl,
+      );
+      _refreshEmployeeListSilently();
+      unawaited(AgentService.instance.refresh());
       try {
         await result.responseFuture;
       } catch (e) {
         if (!mounted) return;
+        _removePendingEmployeeCard(result.agentId);
         final message =
             e.toLocalizedString(context, ExceptionContext.hireEmployee);
         ScaffoldMessenger.of(context).showSnackBar(
@@ -254,17 +269,8 @@ class _DesktopLayoutState extends State<DesktopLayout> {
         return;
       }
       if (!mounted) return;
-      _refreshEmployeeList();
+      _refreshEmployeeListSilently();
       unawaited(AgentService.instance.refresh());
-      showHireSuccessDialog(
-        context: context,
-        employeeName: employeeName,
-        onViewEmployee: _refreshEmployeeList,
-        onContinueHiring: () {
-          if (!mounted) return;
-          unawaited(_openRecruitMenu());
-        },
-      );
     } finally {
       repository.dispose();
       unawaited(_syncRecruitGuideHighlight());

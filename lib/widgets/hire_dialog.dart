@@ -99,6 +99,8 @@ class _HireDialogState extends State<HireDialog> {
           responseFuture:
               widget.repository.waitCreateOperation(accepted.operationId),
           displayName: name,
+          agentId: accepted.agentId,
+          avatarUrl: widget.template.avatarUrl,
         ),
       );
     } catch (e) {

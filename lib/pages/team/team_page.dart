@@ -9,10 +9,9 @@ import 'package:psygo/l10n/l10n.dart';
 import 'package:psygo/models/hire_result.dart';
 import 'package:psygo/repositories/agent_template_repository.dart';
 import 'package:psygo/services/agent_service.dart';
-import 'package:psygo/utils/localized_exception_extension.dart';
 import 'package:psygo/services/recruit_guide_service.dart';
+import 'package:psygo/utils/localized_exception_extension.dart';
 import 'package:psygo/widgets/custom_hire_dialog.dart';
-import 'package:psygo/widgets/hire_success_dialog.dart';
 import 'package:psygo/widgets/recruit_entry_guide_highlight.dart';
 
 import 'package:psygo/pages/wallet/wallet_page.dart';
@@ -62,6 +61,28 @@ class TeamPageController extends State<TeamPage> {
   /// Called after successful hire (background refresh)
   void refreshEmployeeList() {
     _employeesTabKey.currentState?.refreshEmployeeList();
+  }
+
+  void refreshEmployeeListSilently() {
+    final tabState = _employeesTabKey.currentState;
+    if (tabState == null) return;
+    unawaited(tabState.refreshEmployeeListSilently());
+  }
+
+  void addPendingEmployeeCard({
+    required String employeeName,
+    required String agentId,
+    String? avatarUrl,
+  }) {
+    _employeesTabKey.currentState?.addPendingEmployee(
+      displayName: employeeName,
+      agentId: agentId,
+      avatarUrl: avatarUrl,
+    );
+  }
+
+  void removePendingEmployeeCard(String agentId) {
+    _employeesTabKey.currentState?.removePendingEmployee(agentId);
   }
 
   bool get showRecruitGuideHighlight => _showRecruitGuideHighlight;
@@ -138,21 +159,20 @@ class TeamPageController extends State<TeamPage> {
 
       if (!mounted || result == null) return;
 
-      refreshEmployeeList();
-      unawaited(AgentService.instance.refresh());
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(
-          content: Text(L10n.of(context).employeeOnboardingHint),
-          behavior: SnackBarBehavior.floating,
-        ),
-      );
-
       final displayName = result.displayName.trim();
       final employeeName = displayName.isNotEmpty ? displayName : 'Employee';
+      addPendingEmployeeCard(
+        employeeName: employeeName,
+        agentId: result.agentId,
+        avatarUrl: result.avatarUrl,
+      );
+      refreshEmployeeListSilently();
+      unawaited(AgentService.instance.refresh());
       try {
         await result.responseFuture;
       } catch (e) {
         if (!mounted) return;
+        removePendingEmployeeCard(result.agentId);
         final message =
             e.toLocalizedString(context, ExceptionContext.hireEmployee);
         ScaffoldMessenger.of(context).showSnackBar(
@@ -164,17 +184,8 @@ class TeamPageController extends State<TeamPage> {
         return;
       }
       if (!mounted) return;
-      refreshEmployeeList();
+      refreshEmployeeListSilently();
       unawaited(AgentService.instance.refresh());
-      showHireSuccessDialog(
-        context: context,
-        employeeName: employeeName,
-        onViewEmployee: refreshEmployeeList,
-        onContinueHiring: () {
-          if (!mounted) return;
-          unawaited(openRecruitMenu(context));
-        },
-      );
     } finally {
       repository.dispose();
       unawaited(_syncRecruitGuideHighlight());

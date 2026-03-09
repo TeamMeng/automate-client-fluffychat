@@ -45,6 +45,7 @@ class EmployeesTabState extends State<EmployeesTab>
 
   final AgentRepository _repository = AgentRepository();
   final ScrollController _scrollController = ScrollController();
+  final Map<String, Agent> _pendingEmployeesById = <String, Agent>{};
 
   List<Agent> _employees = [];
   bool _isLoading = true;
@@ -135,6 +136,82 @@ class EmployeesTabState extends State<EmployeesTab>
     _offboardingEmployeeIdsNotifier.value = next;
   }
 
+  bool _isPendingPlaceholder(String agentId, Set<String> loadedEmployeeIds) {
+    return _pendingEmployeesById.containsKey(agentId) &&
+        !loadedEmployeeIds.contains(agentId);
+  }
+
+  List<Agent> _mergePendingAvatarIntoLoaded(List<Agent> loadedEmployees) {
+    if (_pendingEmployeesById.isEmpty) return loadedEmployees;
+    return loadedEmployees.map((employee) {
+      final pending = _pendingEmployeesById[employee.agentId];
+      if (pending == null) return employee;
+      final hasLoadedAvatar = employee.avatarUrl?.trim().isNotEmpty == true;
+      final pendingAvatar = pending.avatarUrl?.trim();
+      if (hasLoadedAvatar || pendingAvatar == null || pendingAvatar.isEmpty) {
+        return employee;
+      }
+      return employee.copyWith(avatarUrl: pending.avatarUrl);
+    }).toList();
+  }
+
+  List<Agent> _buildDisplayedEmployees() {
+    final mergedLoadedEmployees = _mergePendingAvatarIntoLoaded(_employees);
+    if (_pendingEmployeesById.isEmpty) return mergedLoadedEmployees;
+    final loadedIds = mergedLoadedEmployees.map((e) => e.agentId).toSet();
+    final merged = <Agent>[
+      ..._pendingEmployeesById.values.where(
+        (pending) => !loadedIds.contains(pending.agentId),
+      ),
+      ...mergedLoadedEmployees,
+    ];
+    return merged;
+  }
+
+  void _reconcilePendingEmployees(Iterable<Agent> loadedEmployees) {
+    if (_pendingEmployeesById.isEmpty) return;
+    final loadedMap = {
+      for (final employee in loadedEmployees) employee.agentId: employee,
+    };
+    _pendingEmployeesById.removeWhere((agentId, pending) {
+      final loaded = loadedMap[agentId];
+      if (loaded == null) return false;
+      final hasLoadedAvatar = loaded.avatarUrl?.trim().isNotEmpty == true;
+      final hasPendingAvatar = pending.avatarUrl?.trim().isNotEmpty == true;
+      // Avatar already available from server, or pending card has no local avatar
+      // to keep as fallback: pending placeholder can be dropped.
+      return hasLoadedAvatar || !hasPendingAvatar;
+    });
+  }
+
+  String _pendingNameFromDisplayName(String displayName) {
+    final normalized = displayName.trim().toLowerCase();
+    final slug = normalized
+        .replaceAll(RegExp(r'[^a-z0-9-]+'), '-')
+        .replaceAll(RegExp(r'-+'), '-')
+        .replaceAll(RegExp(r'^-|-$'), '');
+    return slug.isEmpty ? 'pending-agent' : slug;
+  }
+
+  Agent _buildPendingEmployee({
+    required String agentId,
+    required String displayName,
+    String? avatarUrl,
+  }) {
+    final normalizedDisplayName =
+        displayName.trim().isNotEmpty ? displayName.trim() : 'Employee';
+    final normalizedAvatar = avatarUrl?.trim();
+    return Agent(
+      agentId: agentId,
+      displayName: normalizedDisplayName,
+      name: _pendingNameFromDisplayName(normalizedDisplayName),
+      avatarUrl: normalizedAvatar?.isNotEmpty == true ? normalizedAvatar : null,
+      isActive: true,
+      isReady: false,
+      createdAt: DateTime.now().toUtc().toIso8601String(),
+    );
+  }
+
   Future<void> _loadEmployees() async {
     final requestSeq = ++_replaceRequestSeq;
     setState(() {
@@ -153,9 +230,11 @@ class EmployeesTabState extends State<EmployeesTab>
         },
       );
       if (!mounted || requestSeq != _replaceRequestSeq) return;
+      final mergedAgents = _mergePendingAvatarIntoLoaded(page.agents);
 
       setState(() {
-        _employees = page.agents;
+        _reconcilePendingEmployees(mergedAgents);
+        _employees = mergedAgents;
         _nextCursor = page.nextCursor;
         _hasMore = page.hasNextPage;
         _trialExpiresAt = page.trialExpiresAt;
@@ -189,7 +268,8 @@ class EmployeesTabState extends State<EmployeesTab>
       return;
     }
 
-    final hasUnreadyEmployees = _employees.any((e) => !e.isReady);
+    final hasUnreadyEmployees =
+        _pendingEmployeesById.isNotEmpty || _employees.any((e) => !e.isReady);
 
     if (hasUnreadyEmployees) {
       _startReadyPolling();
@@ -224,15 +304,28 @@ class EmployeesTabState extends State<EmployeesTab>
     try {
       final page = await _repository.getUserAgents(forceRefresh: true);
       if (!mounted || requestSeq != _replaceRequestSeq) return;
+      final mergedAgents = _mergePendingAvatarIntoLoaded(page.agents);
 
       // 只更新已存在员工的 isReady 状态，保留分页数据
-      final updatedMap = {for (final e in page.agents) e.agentId: e};
+      final pendingIdsBeforeRefresh = _pendingEmployeesById.keys.toSet();
+      final updatedMap = {for (final e in mergedAgents) e.agentId: e};
       setState(() {
+        _reconcilePendingEmployees(mergedAgents);
         _employees = _employees.map((e) {
           final updated = updatedMap[e.agentId];
           // 如果在最新数据中找到了这个员工，用新数据替换（主要是更新 isReady）
           return updated ?? e;
         }).toList();
+        if (pendingIdsBeforeRefresh.isNotEmpty) {
+          final existingIds = _employees.map((e) => e.agentId).toSet();
+          for (final pendingId in pendingIdsBeforeRefresh) {
+            final loaded = updatedMap[pendingId];
+            if (loaded != null && !existingIds.contains(pendingId)) {
+              _employees.insert(0, loaded);
+              existingIds.add(pendingId);
+            }
+          }
+        }
       });
       // 刷新后检查是否需要继续轮询
       _checkAndUpdatePolling();
@@ -285,9 +378,11 @@ class EmployeesTabState extends State<EmployeesTab>
     try {
       final page = await _repository.getUserAgents(forceRefresh: true);
       if (!mounted || requestSeq != _replaceRequestSeq) return;
+      final mergedAgents = _mergePendingAvatarIntoLoaded(page.agents);
 
       setState(() {
-        _employees = page.agents;
+        _reconcilePendingEmployees(mergedAgents);
+        _employees = mergedAgents;
         _nextCursor = page.nextCursor;
         _hasMore = page.hasNextPage;
         _trialExpiresAt = page.trialExpiresAt;
@@ -312,6 +407,7 @@ class EmployeesTabState extends State<EmployeesTab>
         cursor: _nextCursor,
         forceRefresh: true,
       );
+      final mergedAgents = _mergePendingAvatarIntoLoaded(page.agents);
       if (mounted) {
         if (replaceSeqAtStart != _replaceRequestSeq) {
           setState(() {
@@ -321,7 +417,8 @@ class EmployeesTabState extends State<EmployeesTab>
         }
 
         setState(() {
-          _employees.addAll(page.agents);
+          _reconcilePendingEmployees(mergedAgents);
+          _employees.addAll(mergedAgents);
           _nextCursor = page.nextCursor;
           _hasMore = page.hasNextPage;
           _isLoadingMore = false;
@@ -347,6 +444,38 @@ class EmployeesTabState extends State<EmployeesTab>
   /// Public method to refresh the employee list
   /// Called from parent when a new employee is hired
   Future<void> refreshEmployeeList() => _refresh();
+
+  /// Public method to refresh employee list without loading skeleton.
+  Future<void> refreshEmployeeListSilently() => _refreshOnEnter();
+
+  /// Add an optimistic onboarding card right after hire request is submitted.
+  void addPendingEmployee({
+    required String displayName,
+    required String agentId,
+    String? avatarUrl,
+  }) {
+    if (!mounted) return;
+    final normalizedId = agentId.trim();
+    if (normalizedId.isEmpty) return;
+    setState(() {
+      _pendingEmployeesById[normalizedId] = _buildPendingEmployee(
+        agentId: normalizedId,
+        displayName: displayName,
+        avatarUrl: avatarUrl,
+      );
+    });
+    _checkAndUpdatePolling();
+  }
+
+  void removePendingEmployee(String agentId) {
+    if (!mounted) return;
+    final normalizedId = agentId.trim();
+    if (normalizedId.isEmpty) return;
+    final removed = _pendingEmployeesById.remove(normalizedId);
+    if (removed == null) return;
+    setState(() {});
+    _checkAndUpdatePolling();
+  }
 
   /// 打开员工详情 Sheet（移动端）或对话框（PC端）
   void _onEmployeeTap(Agent employee) {
@@ -717,8 +846,11 @@ class EmployeesTabState extends State<EmployeesTab>
       );
     }
 
+    final displayedEmployees = _buildDisplayedEmployees();
+    final loadedEmployeeIds = _employees.map((e) => e.agentId).toSet();
+
     // 错误状态 - 包裹在可滚动组件中以支持下拉刷新
-    if (_error != null && _employees.isEmpty) {
+    if (_error != null && displayedEmployees.isEmpty) {
       return SingleChildScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
         child: SizedBox(
@@ -772,7 +904,7 @@ class EmployeesTabState extends State<EmployeesTab>
     }
 
     // 空状态 - 包裹在可滚动组件中以支持下拉刷新
-    if (_employees.isEmpty) {
+    if (displayedEmployees.isEmpty) {
       return SingleChildScrollView(
         physics: const AlwaysScrollableScrollPhysics(),
         child: SizedBox(
@@ -844,18 +976,23 @@ class EmployeesTabState extends State<EmployeesTab>
                       ),
                       delegate: SliverChildBuilderDelegate(
                         (context, index) {
-                          if (index == _employees.length) {
+                          if (index == displayedEmployees.length) {
                             return const Center(
                               child: CircularProgressIndicator(),
                             );
                           }
 
-                          final employee = _employees[index];
-                          final isDeleting = _isOffboarding(employee.agentId);
+                          final employee = displayedEmployees[index];
+                          final isPendingPlaceholder = _isPendingPlaceholder(
+                            employee.agentId,
+                            loadedEmployeeIds,
+                          );
+                          final isDeleting = !isPendingPlaceholder &&
+                              _isOffboarding(employee.agentId);
                           return GestureDetector(
                             // PC端使用右键触发快捷菜单
                             onSecondaryTapDown: (details) {
-                              if (!isDeleting) {
+                              if (!isDeleting && !isPendingPlaceholder) {
                                 _onEmployeeLongPress(
                                   employee,
                                   details.globalPosition,
@@ -865,14 +1002,14 @@ class EmployeesTabState extends State<EmployeesTab>
                             child: EmployeeCard(
                               employee: employee,
                               isOffboarding: isDeleting,
-                              onTap: isDeleting
+                              onTap: (isDeleting || isPendingPlaceholder)
                                   ? null
                                   : () => _onEmployeeTap(employee),
                             ),
                           );
                         },
-                        childCount:
-                            _employees.length + (_isLoadingMore ? 1 : 0),
+                        childCount: displayedEmployees.length +
+                            (_isLoadingMore ? 1 : 0),
                       ),
                     ),
                   ),
@@ -920,32 +1057,39 @@ class EmployeesTabState extends State<EmployeesTab>
           sliver: SliverList(
             delegate: SliverChildBuilderDelegate(
               (context, index) {
-                if (index == _employees.length) {
+                if (index == displayedEmployees.length) {
                   return const Padding(
                     padding: EdgeInsets.all(16),
                     child: Center(child: CircularProgressIndicator()),
                   );
                 }
 
-                final employee = _employees[index];
-                final isDeleting = _isOffboarding(employee.agentId);
+                final employee = displayedEmployees[index];
+                final isPendingPlaceholder = _isPendingPlaceholder(
+                  employee.agentId,
+                  loadedEmployeeIds,
+                );
+                final isDeleting =
+                    !isPendingPlaceholder && _isOffboarding(employee.agentId);
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 12),
                   child: GestureDetector(
                     onLongPressStart: (details) {
-                      if (!isDeleting) {
+                      if (!isDeleting && !isPendingPlaceholder) {
                         _onEmployeeLongPress(employee, details.globalPosition);
                       }
                     },
                     child: EmployeeCard(
                       employee: employee,
                       isOffboarding: isDeleting,
-                      onTap: isDeleting ? null : () => _onEmployeeTap(employee),
+                      onTap: (isDeleting || isPendingPlaceholder)
+                          ? null
+                          : () => _onEmployeeTap(employee),
                     ),
                   ),
                 );
               },
-              childCount: _employees.length + (_isLoadingMore ? 1 : 0),
+              childCount: displayedEmployees.length + (_isLoadingMore ? 1 : 0),
             ),
           ),
         ),
