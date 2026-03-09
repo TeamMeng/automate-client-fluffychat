@@ -116,7 +116,7 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
 
     // 调用创建接口（异步），先返回 UI 结果让入职动画接管
     try {
-      final response = await widget.repository.createCustomAgentWithPlugins(
+      final accepted = await widget.repository.createCustomAgentWithPlugins(
         name: _nameController.text.trim(),
         plugins: null,
         avatarUrl: _avatarUrl,
@@ -124,7 +124,8 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
       if (!mounted) return;
       Navigator.of(context).pop(
         HireResult(
-          responseFuture: Future.value(response),
+          responseFuture:
+              widget.repository.waitCreateOperation(accepted.operationId),
           displayName: _nameController.text.trim(),
         ),
       );
@@ -170,7 +171,8 @@ class _CustomHireDialogState extends State<CustomHireDialog> {
                       decoration: BoxDecoration(
                         color: theme.colorScheme.surface,
                         borderRadius: const BorderRadius.vertical(
-                            top: Radius.circular(28)),
+                          top: Radius.circular(28),
+                        ),
                       ),
                       child: Column(
                         children: [

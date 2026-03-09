@@ -14,6 +14,7 @@ import 'package:psygo/pages/wallet/wallet_page.dart';
 import 'package:psygo/repositories/agent_template_repository.dart';
 import 'package:psygo/services/agent_service.dart';
 import 'package:psygo/utils/fluffy_share.dart';
+import 'package:psygo/utils/localized_exception_extension.dart';
 import 'package:psygo/utils/platform_infos.dart';
 import 'package:psygo/utils/window_service.dart';
 import 'package:psygo/widgets/adaptive_dialogs/show_text_input_dialog.dart';
@@ -192,10 +193,32 @@ class _DesktopLayoutState extends State<DesktopLayout> {
 
       _refreshEmployeeList();
       unawaited(AgentService.instance.refresh());
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(L10n.of(context).employeeOnboardingHint),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
 
       final displayName = result.displayName.trim();
       final employeeName = displayName.isNotEmpty ? displayName : 'Employee';
-
+      try {
+        await result.responseFuture;
+      } catch (e) {
+        if (!mounted) return;
+        final message =
+            e.toLocalizedString(context, ExceptionContext.hireEmployee);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+      if (!mounted) return;
+      _refreshEmployeeList();
+      unawaited(AgentService.instance.refresh());
       showHireSuccessDialog(
         context: context,
         employeeName: employeeName,
@@ -205,11 +228,6 @@ class _DesktopLayoutState extends State<DesktopLayout> {
           unawaited(_openRecruitMenu());
         },
       );
-
-      await result.responseFuture;
-      if (!mounted) return;
-      _refreshEmployeeList();
-      unawaited(AgentService.instance.refresh());
     } finally {
       repository.dispose();
     }

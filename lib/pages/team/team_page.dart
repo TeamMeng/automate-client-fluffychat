@@ -7,6 +7,7 @@ import 'package:psygo/l10n/l10n.dart';
 import 'package:psygo/models/hire_result.dart';
 import 'package:psygo/repositories/agent_template_repository.dart';
 import 'package:psygo/services/agent_service.dart';
+import 'package:psygo/utils/localized_exception_extension.dart';
 import 'package:psygo/widgets/custom_hire_dialog.dart';
 import 'package:psygo/widgets/hire_success_dialog.dart';
 
@@ -162,10 +163,32 @@ class TeamPageController extends State<TeamPage>
 
       refreshEmployeeList();
       unawaited(AgentService.instance.refresh());
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(L10n.of(context).employeeOnboardingHint),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
 
       final displayName = result.displayName.trim();
       final employeeName = displayName.isNotEmpty ? displayName : 'Employee';
-
+      try {
+        await result.responseFuture;
+      } catch (e) {
+        if (!mounted) return;
+        final message =
+            e.toLocalizedString(context, ExceptionContext.hireEmployee);
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text(message),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        return;
+      }
+      if (!mounted) return;
+      refreshEmployeeList();
+      unawaited(AgentService.instance.refresh());
       showHireSuccessDialog(
         context: context,
         employeeName: employeeName,
@@ -175,11 +198,6 @@ class TeamPageController extends State<TeamPage>
           unawaited(openRecruitMenu(context));
         },
       );
-
-      await result.responseFuture;
-      if (!mounted) return;
-      refreshEmployeeList();
-      unawaited(AgentService.instance.refresh());
     } finally {
       repository.dispose();
     }
