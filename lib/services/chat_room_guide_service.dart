@@ -9,8 +9,11 @@ class ChatRoomGuideService {
       'automate_chat_room_guide_completed_v1_';
   static const String _groupMentionGuideKeyPrefix =
       'automate_group_chat_mention_guide_completed_v1_';
+  static const String _employeeWorkTemplateBarKeyPrefix =
+      'automate_employee_work_template_bar_completed_v1_';
   static const bool debugAlwaysShowDirectGuide = true;
   static const bool debugAlwaysShowGroupMentionGuide = true;
+  static const bool debugAlwaysShowEmployeeWorkTemplateBar = true;
 
   Future<bool> shouldShowGuide({
     required String? userId,
@@ -85,6 +88,46 @@ class ChatRoomGuideService {
 
     await _markGuideCompletedByKey(
       key: '$_groupMentionGuideKeyPrefix${normalizedUserId}_$normalizedRoomId',
+    );
+  }
+
+  Future<bool> shouldShowEmployeeWorkTemplateBar({
+    required String? userId,
+    required String? roomId,
+  }) async {
+    final normalizedUserId = userId?.trim() ?? '';
+    final normalizedRoomId = roomId?.trim() ?? '';
+    if (normalizedUserId.isEmpty || normalizedRoomId.isEmpty) {
+      return false;
+    }
+
+    if (debugAlwaysShowEmployeeWorkTemplateBar) {
+      return true;
+    }
+
+    return _shouldShowByKey(
+      key:
+          '$_employeeWorkTemplateBarKeyPrefix${normalizedUserId}_$normalizedRoomId',
+    );
+  }
+
+  Future<void> markEmployeeWorkTemplateBarCompleted({
+    required String? userId,
+    required String? roomId,
+  }) async {
+    final normalizedUserId = userId?.trim() ?? '';
+    final normalizedRoomId = roomId?.trim() ?? '';
+    if (normalizedUserId.isEmpty || normalizedRoomId.isEmpty) {
+      return;
+    }
+
+    if (debugAlwaysShowEmployeeWorkTemplateBar) {
+      return;
+    }
+
+    await _markGuideCompletedByKey(
+      key:
+          '$_employeeWorkTemplateBarKeyPrefix${normalizedUserId}_$normalizedRoomId',
     );
   }
 

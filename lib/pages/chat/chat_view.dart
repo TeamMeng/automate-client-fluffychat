@@ -18,6 +18,7 @@ import 'package:psygo/services/agent_service.dart';
 import 'package:psygo/utils/account_config.dart';
 import 'package:psygo/utils/localized_exception_extension.dart';
 import 'package:psygo/widgets/chat_settings_popup_menu.dart';
+import 'package:psygo/widgets/employee_work_template_bar.dart';
 import 'package:psygo/widgets/future_loading_dialog.dart';
 import 'package:psygo/widgets/agent_web_entry_view.dart';
 import 'package:psygo/widgets/chat_room_intro_guide.dart';
@@ -135,6 +136,114 @@ class ChatView extends StatelessWidget {
       primaryActionLabel: controller.chatRoomGuideStepIndex >= steps.length - 1
           ? l10n.confirm
           : l10n.next,
+    );
+  }
+
+  List<EmployeeWorkTemplateItem> _employeeWorkTemplates(BuildContext context) {
+    final l10n = L10n.of(context);
+    return [
+      EmployeeWorkTemplateItem(
+        icon: Icons.today_outlined,
+        title: l10n.employeeWorkTemplatePlanTitle,
+        description: l10n.employeeWorkTemplatePlanDescription,
+        message: l10n.employeeWorkTemplatePlanMessage,
+      ),
+      EmployeeWorkTemplateItem(
+        icon: Icons.notes_rounded,
+        title: l10n.employeeWorkTemplateSummaryTitle,
+        description: l10n.employeeWorkTemplateSummaryDescription,
+        message: l10n.employeeWorkTemplateSummaryMessage,
+      ),
+      EmployeeWorkTemplateItem(
+        icon: Icons.bug_report_outlined,
+        title: l10n.employeeWorkTemplateIssueTitle,
+        description: l10n.employeeWorkTemplateIssueDescription,
+        message: l10n.employeeWorkTemplateIssueMessage,
+      ),
+    ];
+  }
+
+  Future<void> _handleEmployeeWorkTemplateTap(
+    BuildContext context,
+    EmployeeWorkTemplateItem template,
+  ) async {
+    final l10n = L10n.of(context);
+    final shouldSend = await showEmployeeWorkTemplatePreviewDialog(
+      context: context,
+      template: template,
+      previewLabel: l10n.employeeWorkTemplatePreviewLabel,
+      sendLabel: l10n.send,
+      cancelLabel: l10n.cancel,
+    );
+    if (shouldSend == true) {
+      controller.sendEmployeeWorkTemplateMessage(template.message);
+    }
+  }
+
+  Widget _buildTimelinePane(BuildContext context) {
+    final l10n = L10n.of(context);
+    final theme = Theme.of(context);
+
+    return Column(
+      children: [
+        if ((controller.showEmployeeWorkTemplateBar ||
+                controller.isEmployeeChatGuide) &&
+            controller.activeThreadId == null)
+          EmployeeWorkTemplateBar(
+            key: controller.employeeWorkTemplateGuideKey,
+            title: l10n.employeeWorkTemplatesTitle,
+            subtitle: l10n.employeeWorkTemplatesSubtitle,
+            templates: _employeeWorkTemplates(context),
+            onTemplateTap: (template) =>
+                _handleEmployeeWorkTemplateTap(context, template),
+          ),
+        Expanded(
+          child: Stack(
+            children: [
+              GestureDetector(
+                onTap: controller.clearSingleSelectedEvent,
+                child: ChatEventList(
+                  controller: controller,
+                ),
+              ),
+              if (controller.readMarkerEventId.isNotEmpty)
+                Positioned(
+                  top: 8,
+                  right: 8,
+                  child: Material(
+                    color: theme.colorScheme.primaryContainer,
+                    borderRadius: BorderRadius.circular(20),
+                    child: InkWell(
+                      onTap: controller.scrollToReadMarker,
+                      borderRadius: BorderRadius.circular(20),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(
+                          horizontal: 12,
+                          vertical: 8,
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              Icons.arrow_upward,
+                              size: 16,
+                              color: theme.colorScheme.onPrimaryContainer,
+                            ),
+                            const SizedBox(width: 4),
+                            const Text(
+                              '新消息',
+                              style: TextStyle(fontSize: 12),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ],
     );
   }
 
@@ -537,65 +646,7 @@ class ChatView extends StatelessWidget {
                                     ? AgentWebEntryView(
                                         url: controller.webEntryUrl!,
                                       )
-                                    : Stack(
-                                        children: [
-                                          GestureDetector(
-                                            onTap: controller
-                                                .clearSingleSelectedEvent,
-                                            child: ChatEventList(
-                                              controller: controller,
-                                            ),
-                                          ),
-                                          // Scroll to last read position button
-                                          if (controller
-                                              .readMarkerEventId.isNotEmpty)
-                                            Positioned(
-                                              top: 8,
-                                              right: 8,
-                                              child: Material(
-                                                color: theme.colorScheme
-                                                    .primaryContainer,
-                                                borderRadius:
-                                                    BorderRadius.circular(20),
-                                                child: InkWell(
-                                                  onTap: controller
-                                                      .scrollToReadMarker,
-                                                  borderRadius:
-                                                      BorderRadius.circular(20),
-                                                  child: Padding(
-                                                    padding: const EdgeInsets
-                                                        .symmetric(
-                                                      horizontal: 12,
-                                                      vertical: 8,
-                                                    ),
-                                                    child: Row(
-                                                      mainAxisSize:
-                                                          MainAxisSize.min,
-                                                      children: [
-                                                        Icon(
-                                                          Icons.arrow_upward,
-                                                          size: 16,
-                                                          color: theme
-                                                              .colorScheme
-                                                              .onPrimaryContainer,
-                                                        ),
-                                                        const SizedBox(
-                                                          width: 4,
-                                                        ),
-                                                        const Text(
-                                                          '新消息',
-                                                          style: TextStyle(
-                                                            fontSize: 12,
-                                                          ),
-                                                        ),
-                                                      ],
-                                                    ),
-                                                  ),
-                                                ),
-                                              ),
-                                            ),
-                                        ],
-                                      ),
+                                    : _buildTimelinePane(context),
                               ),
                               if (controller.showScrollDownButton)
                                 Divider(

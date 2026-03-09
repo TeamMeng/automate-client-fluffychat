@@ -163,10 +163,14 @@ class ChatController extends State<ChatPageWithRoom>
   final GlobalKey chatRoomGuideContainerKey = GlobalKey();
   final GlobalKey workStatusGuideKey = GlobalKey();
   final GlobalKey webEntryGuideKey = GlobalKey();
+  final GlobalKey employeeWorkTemplateGuideKey = GlobalKey();
   final GlobalKey mentionGuideKey = GlobalKey();
   bool _showChatRoomGuide = false;
   bool _pendingChatRoomGuide = false;
   bool _chatRoomGuideCompleted = false;
+  bool _showEmployeeWorkTemplateBar = false;
+  bool _pendingEmployeeWorkTemplateBar = false;
+  bool _employeeWorkTemplateBarCompleted = false;
   int _chatRoomGuideStepIndex = 0;
   ChatRoomGuideType? _chatRoomGuideType;
 
@@ -174,6 +178,7 @@ class ChatController extends State<ChatPageWithRoom>
   bool get webEntryLoading => _webEntryLoading;
   String? get webEntryUrl => _webEntryUrl;
   bool get showChatRoomGuide => _showChatRoomGuide;
+  bool get showEmployeeWorkTemplateBar => _showEmployeeWorkTemplateBar;
   int get chatRoomGuideStepIndex => _chatRoomGuideStepIndex;
   ChatRoomGuideType? get chatRoomGuideType => _chatRoomGuideType;
   bool get isEmployeeChatGuide =>
@@ -627,6 +632,7 @@ class ChatController extends State<ChatPageWithRoom>
     _agentServiceListener = () {
       if (!mounted) return;
       _maybeStartChatRoomGuide();
+      _maybeShowEmployeeWorkTemplateBar();
       setState(() {});
     };
     AgentService.instance.agentsNotifier.addListener(_agentServiceListener);
@@ -651,6 +657,7 @@ class ChatController extends State<ChatPageWithRoom>
     WidgetsBinding.instance.addObserver(this);
     _tryLoadTimeline();
     unawaited(_loadChatRoomGuideState());
+    unawaited(_loadEmployeeWorkTemplateBarState());
     if (kIsWeb) {
       onFocusSub = html.window.onFocus.listen((_) => setReadMarker());
     }
@@ -698,6 +705,46 @@ class ChatController extends State<ChatPageWithRoom>
       _showChatRoomGuide = true;
       _chatRoomGuideStepIndex = 0;
     });
+  }
+
+  Future<void> _loadEmployeeWorkTemplateBarState() async {
+    if (room.directChatMatrixID == null) return;
+
+    final shouldShow =
+        await ChatRoomGuideService.instance.shouldShowEmployeeWorkTemplateBar(
+      userId: sendingClient.userID,
+      roomId: roomId,
+    );
+    if (!mounted || !shouldShow) return;
+
+    _pendingEmployeeWorkTemplateBar = true;
+    _maybeShowEmployeeWorkTemplateBar();
+  }
+
+  void _maybeShowEmployeeWorkTemplateBar() {
+    if (!mounted ||
+        _showEmployeeWorkTemplateBar ||
+        _employeeWorkTemplateBarCompleted ||
+        !_pendingEmployeeWorkTemplateBar) {
+      return;
+    }
+
+    if (room.directChatMatrixID == null || webEntryAgent == null) {
+      return;
+    }
+
+    setState(() {
+      _showEmployeeWorkTemplateBar = true;
+      _pendingEmployeeWorkTemplateBar = false;
+      _employeeWorkTemplateBarCompleted = true;
+    });
+
+    unawaited(
+      ChatRoomGuideService.instance.markEmployeeWorkTemplateBarCompleted(
+        userId: sendingClient.userID,
+        roomId: roomId,
+      ),
+    );
   }
 
   void nextChatRoomGuideStep() {
@@ -2082,6 +2129,28 @@ class ChatController extends State<ChatPageWithRoom>
     inputFocus.requestFocus();
 
     if (isGroupMentionGuide && showChatRoomGuide) {
+      unawaited(dismissChatRoomGuide());
+    }
+  }
+
+  void sendEmployeeWorkTemplateMessage(String text) {
+    final trimmedText = text.trim();
+    if (trimmedText.isEmpty) return;
+
+    if (_webEntryOpen || _webEntryLoading) {
+      closeWebEntry();
+    }
+
+    room.sendTextEvent(
+      trimmedText,
+      parseCommands: false,
+      threadRootEventId: activeThreadId,
+    );
+    inputFocus.requestFocus();
+
+    if (isEmployeeChatGuide &&
+        _chatRoomGuideStepIndex == 3 &&
+        showChatRoomGuide) {
       unawaited(dismissChatRoomGuide());
     }
   }
