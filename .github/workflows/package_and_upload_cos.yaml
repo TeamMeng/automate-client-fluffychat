@@ -311,12 +311,33 @@ jobs:
             fi
 
             object_key="${channel}/${platform}/${file_name}"
-            echo "Uploading $file_name -> cos://${COS_BUCKET}/${object_key}"
-            python3 scripts/ci/cos_upload.py \
-              --secret-id "$COS_SECRET_ID" \
-              --secret-key "$COS_SECRET_KEY" \
-              --bucket "$COS_BUCKET" \
-              --region "$COS_REGION" \
-              --file "$file_path" \
-              --object-key "$object_key"
+            file_size_bytes="$(wc -c < "$file_path" | tr -d '[:space:]')"
+            echo "Uploading $file_name (${file_size_bytes} bytes) -> cos://${COS_BUCKET}/${object_key}"
+
+            uploaded=0
+            for attempt in 1 2 3; do
+              echo "Attempt ${attempt}/3: $file_name"
+              if python3 scripts/ci/cos_upload.py \
+                --secret-id "$COS_SECRET_ID" \
+                --secret-key "$COS_SECRET_KEY" \
+                --bucket "$COS_BUCKET" \
+                --region "$COS_REGION" \
+                --file "$file_path" \
+                --object-key "$object_key" \
+                --timeout 1200; then
+                uploaded=1
+                break
+              fi
+
+              if [ "$attempt" -lt 3 ]; then
+                sleep_seconds=$((attempt * 20))
+                echo "Retrying $file_name in ${sleep_seconds}s..."
+                sleep "$sleep_seconds"
+              fi
+            done
+
+            if [ "$uploaded" -ne 1 ]; then
+              echo "Failed to upload $file_name after 3 attempts"
+              exit 1
+            fi
           done
