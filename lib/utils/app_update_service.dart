@@ -230,21 +230,23 @@ class AppUpdateService {
       // 标记弹窗正在显示
       _isDialogShowing = true;
 
-      // 显示更新弹窗（禁止点击遮罩层关闭，只能通过按钮操作）
-      await showDialog<bool>(
-        context: context,
-        barrierDismissible: false,
-        builder: (dialogContext) => _UpdateDialog(
-          latestVersion: response.latestVersion,
-          forceUpdate: response.forceUpdate,
-          downloadUrl: downloadUrl,
-          changelog: response.changelog,
-          refreshDownloadUrl: () =>
-              _refreshDownloadUrl(currentVersion, platform),
-        ),
-      );
-
-      _isDialogShowing = false;
+      try {
+        // 显示更新弹窗（禁止点击遮罩层关闭，只能通过按钮操作）
+        await showDialog<bool>(
+          context: context,
+          barrierDismissible: false,
+          builder: (dialogContext) => _UpdateDialog(
+            latestVersion: response.latestVersion,
+            forceUpdate: response.forceUpdate,
+            downloadUrl: downloadUrl,
+            changelog: response.changelog,
+            refreshDownloadUrl: () =>
+                _refreshDownloadUrl(currentVersion, platform),
+          ),
+        );
+      } finally {
+        _isDialogShowing = false;
+      }
     } catch (e) {
       // 静默检查失败，如果从未成功检查过，安排重试
       // 但如果是 404/500 等服务器错误，不重试（API 不存在或服务器问题）
