@@ -190,6 +190,7 @@ jobs:
       - uses: moonrepo/setup-rust@v1
       - run: flutter pub get
       - name: Build DEB
+        id: build_deb
         env:
           ENV_JSON_CONTENT: ${{ secrets[matrix.target.env_secret] }}
         run: |
@@ -200,28 +201,73 @@ jobs:
           fi
           printf '%s' "$ENV_JSON_CONTENT" > ci.env.json
           python3 -m json.tool ci.env.json >/dev/null
-          ./build-deb.sh ci.env.json
-      - name: Compute artifact name
-        id: meta
-        run: |
-          app_version="$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | head -n1)"
-          version_tag="${app_version//+/-}"
-          file_name="psygo-linux-deb-${{ matrix.target.channel }}-${version_tag}-r${{ github.run_number }}.deb"
-          echo "file_name=$file_name" >> "$GITHUB_OUTPUT"
-      - name: Normalize DEB file
-        run: |
-          set -euo pipefail
-          mkdir -p dist/linux
-          deb_path="$(find dist -maxdepth 2 -type f -name '*.deb' | head -n1)"
-          if [ -z "$deb_path" ]; then
-            echo "DEB package not found"
+
+          flutter build linux --release --dart-define-from-file=ci.env.json
+
+          bundle_dir="build/linux/x64/release/bundle"
+          if [ ! -d "$bundle_dir" ]; then
+            echo "Linux bundle not found: $bundle_dir"
             exit 1
           fi
-          cp "$deb_path" "dist/linux/${{ steps.meta.outputs.file_name }}"
+
+          package_name="psygo"
+          binary_name="psygo"
+          channel="${{ matrix.target.channel }}"
+          app_version="$(sed -n 's/^version:[[:space:]]*//p' pubspec.yaml | head -n1)"
+          version_tag="${app_version//+/-}"
+          arch="$(dpkg --print-architecture)"
+          file_name="psygo-linux-deb-${channel}-${version_tag}-r${{ github.run_number }}.deb"
+
+          pkg_root="dist/pkg/${package_name}_${version_tag}_${arch}"
+          rm -rf "$pkg_root"
+          mkdir -p \
+            "$pkg_root/DEBIAN" \
+            "$pkg_root/usr/local/lib/$package_name" \
+            "$pkg_root/usr/bin" \
+            "$pkg_root/usr/share/applications" \
+            "$pkg_root/usr/share/icons/hicolor/512x512/apps" \
+            dist/linux
+
+          cp -a "$bundle_dir"/* "$pkg_root/usr/local/lib/$package_name/"
+
+          {
+            echo "Package: $package_name"
+            echo "Version: $version_tag"
+            echo "Architecture: $arch"
+            echo "Priority: optional"
+            echo "Maintainer: Psygo CI"
+            echo "Description: Psygo desktop client"
+          } > "$pkg_root/DEBIAN/control"
+
+          {
+            echo "#!/bin/bash"
+            echo "/usr/local/lib/$package_name/$binary_name \"\$@\""
+          } > "$pkg_root/usr/bin/$binary_name"
+          chmod 755 "$pkg_root/usr/bin/$binary_name"
+
+          {
+            echo "[Desktop Entry]"
+            echo "Version=1.0"
+            echo "Name=Psygo"
+            echo "GenericName=Psygo"
+            echo "Comment=Psygo desktop client"
+            echo "Exec=$binary_name"
+            echo "Icon=$package_name"
+            echo "Terminal=false"
+            echo "Type=Application"
+            echo "Categories=Utility;"
+          } > "$pkg_root/usr/share/applications/${package_name}.desktop"
+
+          if [ -f "debian/gui/psygo.png" ]; then
+            cp "debian/gui/psygo.png" "$pkg_root/usr/share/icons/hicolor/512x512/apps/${package_name}.png"
+          fi
+
+          dpkg-deb --build "$pkg_root" "dist/linux/${file_name}"
+          echo "file_name=$file_name" >> "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ steps.meta.outputs.file_name }}
-          path: dist/linux/${{ steps.meta.outputs.file_name }}
+          name: ${{ steps.build_deb.outputs.file_name }}
+          path: dist/linux/${{ steps.build_deb.outputs.file_name }}
           if-no-files-found: error
 
   upload_to_cos:
