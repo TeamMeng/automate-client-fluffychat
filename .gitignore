@@ -1,7 +1,8 @@
 # Environment variables (contains sensitive data)
-.env
+.env*
+!.env.example
 env*.json
-!env.json.example
+!env*.example
 
 
 # auto-generated icon sets

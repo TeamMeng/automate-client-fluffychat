@@ -88,7 +88,7 @@ class _HireDialogState extends State<HireDialog> {
     });
 
     try {
-      final response = await widget.repository.hireFromTemplate(
+      final accepted = await widget.repository.hireFromTemplate(
         widget.template.id,
         name,
         avatarUrl: widget.template.avatarUrl,
@@ -96,8 +96,11 @@ class _HireDialogState extends State<HireDialog> {
       if (!mounted) return;
       Navigator.of(context).pop(
         HireResult(
-          responseFuture: Future.value(response),
+          responseFuture:
+              widget.repository.waitCreateOperation(accepted.operationId),
           displayName: name,
+          agentId: accepted.agentId,
+          avatarUrl: widget.template.avatarUrl,
         ),
       );
     } catch (e) {
@@ -306,13 +309,16 @@ class _HireDialogState extends State<HireDialog> {
                               : Row(
                                   mainAxisAlignment: MainAxisAlignment.center,
                                   children: [
-                                    const Icon(Icons.person_add_rounded,
-                                        size: 18),
+                                    const Icon(
+                                      Icons.person_add_rounded,
+                                      size: 18,
+                                    ),
                                     const SizedBox(width: 6),
                                     Text(
                                       l10n.confirmHire,
                                       style: const TextStyle(
-                                          fontWeight: FontWeight.w600),
+                                        fontWeight: FontWeight.w600,
+                                      ),
                                     ),
                                   ],
                                 ),
