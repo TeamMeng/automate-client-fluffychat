@@ -18,19 +18,9 @@ void showMemberActionsPopupMenu({
 }) async {
   final theme = Theme.of(context);
   final isMe = user.room.client.userID == user.id;
-
-  // 优先使用员工头像和名称
-  final agentAvatarUri = AgentService.instance.getAgentAvatarUri(user.id);
-  final Uri? avatarUrl;
-  final String displayname;
-  if (agentAvatarUri != null) {
-    final agent = AgentService.instance.getAgentByMatrixUserId(user.id);
-    avatarUrl = agentAvatarUri;
-    displayname = agent!.displayName;
-  } else {
-    avatarUrl = user.avatarUrl;
-    displayname = user.calcDisplayname();
-  }
+  AgentService.instance.ensureMatrixProfilePresentation(user);
+  final avatarUrl = AgentService.instance.resolveAvatarUri(user);
+  final displayname = AgentService.instance.resolveDisplayName(user);
 
   final overlay = Overlay.of(context).context.findRenderObject() as RenderBox;
 
