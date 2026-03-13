@@ -154,6 +154,7 @@ class ChatController extends State<ChatPageWithRoom>
   bool currentlyTyping = false;
   bool dragging = false;
   late final VoidCallback _agentServiceListener;
+  bool _groupLiveStatusWatcherAttached = false;
 
   // Agent Web entry (reverse-tunnel) state.
   final AgentRepository _webEntryRepository = AgentRepository();
@@ -674,6 +675,10 @@ class ChatController extends State<ChatPageWithRoom>
     );
 
     sendingClient = Matrix.of(context).client;
+    if (room.directChatMatrixID == null) {
+      AgentService.instance.attachLiveStatusWatcher();
+      _groupLiveStatusWatcherAttached = true;
+    }
     final lastEventThreadId =
         room.lastEvent?.relationshipType == RelationshipTypes.thread
             ? room.lastEvent?.relationshipEventId
@@ -996,6 +1001,10 @@ class ChatController extends State<ChatPageWithRoom>
 
   @override
   void dispose() {
+    if (_groupLiveStatusWatcherAttached) {
+      AgentService.instance.detachLiveStatusWatcher();
+      _groupLiveStatusWatcherAttached = false;
+    }
     AgentService.instance.agentsNotifier.removeListener(_agentServiceListener);
     _webEntryRepository.dispose();
     timeline?.cancelSubscriptions();

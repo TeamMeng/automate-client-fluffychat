@@ -392,7 +392,7 @@ class Message extends StatelessWidget {
                                           child: Avatar(
                                             mxContent: sender.avatarUrl,
                                             name: sender.displayName,
-                                            showWorkingPulse: !event.room.isDirectChat &&
+                                            showWorkingPulse:
                                                 sender.isWorkingEmployee,
                                             onTap: () =>
                                                 showSenderMenu(context, user),
@@ -425,9 +425,8 @@ class Message extends StatelessWidget {
                                                 child: Avatar(
                                                   mxContent: sender.avatarUrl,
                                                   name: sender.displayName,
-                                                  showWorkingPulse:
-                                                      !event.room.isDirectChat &&
-                                                          sender.isWorkingEmployee,
+                                                  showWorkingPulse: sender
+                                                      .isWorkingEmployee,
                                                   onTap: () => showSenderMenu(
                                                     context,
                                                     user,
