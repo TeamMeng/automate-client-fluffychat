@@ -3,10 +3,13 @@
 library;
 
 import 'dart:async';
+import 'dart:convert';
 
 import 'package:flutter/foundation.dart';
 import 'package:matrix/matrix.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
+import '../config/setting_keys.dart';
 import '../core/config.dart';
 import '../models/agent.dart';
 import '../repositories/agent_repository.dart';
@@ -28,13 +31,19 @@ class AgentService {
   final Map<String, Agent> _matrixUserIdToAgent = {};
   final Map<String, _MatrixProfilePresentation>
       _resolvedMemberPresentationByUserId = {};
+  final Map<String, DateTime> _resolvedMemberUpdatedAtByUserId = {};
   final Map<String, _MatrixProfilePresentation> _profilePresentationByUserId =
       {};
+  bool _resolvedMemberCacheLoaded = false;
+  bool _resolvedMemberCachePersistScheduled = false;
   final Set<String> _resolvedMemberLookupInFlight = {};
   final Map<String, DateTime> _resolvedMemberLookupLastAttemptAt = {};
   final Set<String> _pendingResolvedMemberLookupUserIds = {};
   bool _resolvedMemberLookupScheduled = false;
   static const Duration _resolvedMemberLookupCooldown = Duration(minutes: 1);
+  static const String _resolvedMemberCacheStorageKey =
+      'automate_resolved_members_cache_v1';
+  static const int _resolvedMemberCacheMaxEntries = 1000;
   final Set<String> _profileLookupInFlight = {};
   final Map<String, DateTime> _profileLookupLastAttemptAt = {};
   static const Duration _profileLookupCooldown = Duration(minutes: 1);
@@ -63,6 +72,7 @@ class AgentService {
 
     _isLoading = true;
     try {
+      _ensureResolvedMemberCacheLoaded();
       await _loadAllAgents();
       _initialized = true;
     } catch (e) {
@@ -160,6 +170,7 @@ class AgentService {
     String? matrixUserId, {
     String? fallbackDisplayName,
   }) {
+    _ensureResolvedMemberCacheLoaded();
     final key = matrixUserId?.trim() ?? '';
     if (key.isEmpty) {
       return '';
@@ -199,6 +210,7 @@ class AgentService {
     String? matrixUserId, {
     Uri? fallbackAvatarUri,
   }) {
+    _ensureResolvedMemberCacheLoaded();
     final key = matrixUserId?.trim() ?? '';
     if (key.isEmpty) {
       return fallbackAvatarUri;
@@ -258,6 +270,7 @@ class AgentService {
     String? fallbackDisplayName,
     Uri? fallbackAvatarUri,
   }) {
+    _ensureResolvedMemberCacheLoaded();
     final key = matrixUserId?.trim() ?? '';
     if (key.isEmpty) {
       return;
@@ -389,10 +402,12 @@ class AgentService {
           displayName: displayName,
           avatarUrl: avatarUrl,
         );
+        _resolvedMemberUpdatedAtByUserId[matrixUserId] = DateTime.now().toUtc();
         changed = true;
       }
 
       if (changed) {
+        _schedulePersistResolvedMemberCache();
         _notifyChanged();
       }
     } catch (e) {
@@ -402,6 +417,143 @@ class AgentService {
         _resolvedMemberLookupInFlight.remove(matrixUserId);
       }
     }
+  }
+
+  SharedPreferences? _safePreferences() {
+    try {
+      return AppSettings.store;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  void _ensureResolvedMemberCacheLoaded() {
+    if (_resolvedMemberCacheLoaded) {
+      return;
+    }
+    _resolvedMemberCacheLoaded = true;
+
+    final store = _safePreferences();
+    if (store == null) {
+      return;
+    }
+
+    final raw = store.getString(_resolvedMemberCacheStorageKey);
+    if (raw == null || raw.trim().isEmpty) {
+      return;
+    }
+
+    try {
+      final decoded = jsonDecode(raw);
+      if (decoded is! Map) {
+        return;
+      }
+      final items = decoded['items'];
+      if (items is! Map) {
+        return;
+      }
+
+      for (final entry in items.entries) {
+        final fallbackMatrixUserId = entry.key.toString().trim();
+        final value = entry.value;
+        if (value is! Map) {
+          continue;
+        }
+
+        final item = value.cast<String, dynamic>();
+        final matrixUserId =
+            ((item['matrix_user_id'] as String?)?.trim() ?? fallbackMatrixUserId)
+                .trim();
+        if (matrixUserId.isEmpty) {
+          continue;
+        }
+
+        final displayName = _normalizeDisplayNameCandidate(
+          item['display_name'] as String?,
+          matrixUserId,
+        );
+        final avatarUrl = _normalizeAvatarUrl(item['avatar_url'] as String?);
+        if (displayName == null && avatarUrl == null) {
+          continue;
+        }
+
+        _resolvedMemberPresentationByUserId[matrixUserId] =
+            _MatrixProfilePresentation(
+          displayName: displayName,
+          avatarUrl: avatarUrl,
+        );
+
+        final updatedAtMs = item['updated_at_ms'];
+        if (updatedAtMs is int && updatedAtMs > 0) {
+          _resolvedMemberUpdatedAtByUserId[matrixUserId] =
+              DateTime.fromMillisecondsSinceEpoch(updatedAtMs, isUtc: true);
+        } else {
+          _resolvedMemberUpdatedAtByUserId[matrixUserId] =
+              DateTime.now().toUtc();
+        }
+      }
+    } catch (e) {
+      debugPrint('[AgentService] Load resolved member cache failed: $e');
+    }
+  }
+
+  void _schedulePersistResolvedMemberCache() {
+    if (_resolvedMemberCachePersistScheduled) {
+      return;
+    }
+    _resolvedMemberCachePersistScheduled = true;
+    scheduleMicrotask(_persistResolvedMemberCache);
+  }
+
+  Future<void> _persistResolvedMemberCache() async {
+    _resolvedMemberCachePersistScheduled = false;
+
+    final store = _safePreferences();
+    if (store == null) {
+      return;
+    }
+
+    if (_resolvedMemberPresentationByUserId.isEmpty) {
+      await store.remove(_resolvedMemberCacheStorageKey);
+      return;
+    }
+
+    final entries = _resolvedMemberPresentationByUserId.entries.toList();
+    entries.sort((a, b) {
+      final aTime = _resolvedMemberUpdatedAtByUserId[a.key] ??
+          DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+      final bTime = _resolvedMemberUpdatedAtByUserId[b.key] ??
+          DateTime.fromMillisecondsSinceEpoch(0, isUtc: true);
+      return bTime.compareTo(aTime);
+    });
+    final limited = entries.take(_resolvedMemberCacheMaxEntries).toList();
+
+    final keepKeys = limited.map((e) => e.key).toSet();
+    _resolvedMemberPresentationByUserId.removeWhere(
+      (key, _) => !keepKeys.contains(key),
+    );
+    _resolvedMemberUpdatedAtByUserId.removeWhere(
+      (key, _) => !keepKeys.contains(key),
+    );
+
+    final items = <String, Map<String, dynamic>>{};
+    for (final entry in limited) {
+      final updatedAt = _resolvedMemberUpdatedAtByUserId[entry.key] ??
+          DateTime.now().toUtc();
+      items[entry.key] = {
+        'matrix_user_id': entry.key,
+        if (entry.value.displayName != null)
+          'display_name': entry.value.displayName,
+        if (entry.value.avatarUrl != null) 'avatar_url': entry.value.avatarUrl,
+        'updated_at_ms': updatedAt.millisecondsSinceEpoch,
+      };
+    }
+
+    final payload = jsonEncode({
+      'version': 1,
+      'items': items,
+    });
+    await store.setString(_resolvedMemberCacheStorageKey, payload);
   }
 
   Future<void> _loadMatrixProfilePresentation({
@@ -592,6 +744,9 @@ class AgentService {
     _liveStatusPollingTimer?.cancel();
     _liveStatusPollingTimer = null;
     _resolvedMemberPresentationByUserId.clear();
+    _resolvedMemberUpdatedAtByUserId.clear();
+    _resolvedMemberCacheLoaded = false;
+    _resolvedMemberCachePersistScheduled = false;
     _resolvedMemberLookupInFlight.clear();
     _resolvedMemberLookupLastAttemptAt.clear();
     _pendingResolvedMemberLookupUserIds.clear();
