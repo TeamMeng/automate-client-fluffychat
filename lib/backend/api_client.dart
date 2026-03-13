@@ -1,11 +1,20 @@
+import 'dart:math';
+
 import 'package:dio/dio.dart';
 import 'package:file_selector/file_selector.dart';
 import 'package:flutter/foundation.dart';
+import 'package:flutter_secure_storage/flutter_secure_storage.dart';
 import 'auth_state.dart';
 import 'exceptions.dart';
 import '../core/config.dart';
 import '../core/token_manager.dart';
 import '../utils/custom_http_client.dart';
+
+enum TokenRefreshOutcome {
+  success,
+  transientFailure,
+  invalidSession,
+}
 
 class PsygoApiClient {
   PsygoApiClient(this.auth, {Dio? dio})
@@ -33,19 +42,26 @@ class PsygoApiClient {
 
         // 尝试刷新 token
         debugPrint('[API] 401 received, attempting token refresh...');
-        final refreshSuccess = await refreshAccessToken();
+        final refreshOutcome = await refreshAccessTokenWithOutcome();
 
-        if (!refreshSuccess) {
-          debugPrint('[API] Token refresh failed, logging out');
-          await auth.markLoggedOut();
+        if (refreshOutcome != TokenRefreshOutcome.success) {
+          if (refreshOutcome == TokenRefreshOutcome.invalidSession) {
+            debugPrint(
+                '[API] Token refresh failed with invalid session, logging out');
+            await auth.markLoggedOut();
+          } else {
+            debugPrint(
+                '[API] Token refresh failed due to transient error, keep session');
+          }
           return handler.next(error);
         }
 
         // 刷新成功，重试原请求
         debugPrint('[API] Token refreshed, retrying request...');
         try {
-          final newToken =
-              await TokenManager.instance.getAccessToken(autoRefresh: false);
+          final newToken = await TokenManager.instance.getAccessToken(
+            autoRefresh: false,
+          );
           options.headers['Authorization'] = 'Bearer $newToken';
           options.extra['_retried'] = true;
 
@@ -62,6 +78,9 @@ class PsygoApiClient {
   final PsygoAuthState auth;
   final Dio _dio;
   static const Set<int> _unauthorizedCodes = {10002, 10003};
+  static const FlutterSecureStorage _secureStorage = FlutterSecureStorage();
+  static const String _authDeviceIdKey = 'automate_auth_device_id';
+  static const String _hexChars = '0123456789abcdef';
 
   Future<void> _syncAuthState() async {
     await auth.load();
@@ -82,6 +101,44 @@ class PsygoApiClient {
     return code != null && _unauthorizedCodes.contains(code);
   }
 
+  String _authDevicePlatform() {
+    if (kIsWeb) return 'web';
+    switch (defaultTargetPlatform) {
+      case TargetPlatform.android:
+        return 'android';
+      case TargetPlatform.iOS:
+        return 'ios';
+      case TargetPlatform.windows:
+        return 'windows';
+      case TargetPlatform.macOS:
+        return 'macos';
+      case TargetPlatform.linux:
+        return 'linux';
+      case TargetPlatform.fuchsia:
+        return 'fuchsia';
+    }
+  }
+
+  String _randomHex(int length) {
+    final random = Random.secure();
+    final buffer = StringBuffer();
+    for (var i = 0; i < length; i++) {
+      buffer.write(_hexChars[random.nextInt(_hexChars.length)]);
+    }
+    return buffer.toString();
+  }
+
+  Future<String> _getOrCreateAuthDeviceId() async {
+    final existing = (await _secureStorage.read(key: _authDeviceIdKey))?.trim();
+    if (existing != null && existing.isNotEmpty) {
+      return existing;
+    }
+    final generated =
+        '${_authDevicePlatform()}_${DateTime.now().millisecondsSinceEpoch.toRadixString(36)}_${_randomHex(12)}';
+    await _secureStorage.write(key: _authDeviceIdKey, value: generated);
+    return generated;
+  }
+
   Future<Response<Map<String, dynamic>>> _requestWithAuthRetry(
     Future<Response<Map<String, dynamic>>> Function(String token) request,
   ) async {
@@ -98,10 +155,12 @@ class PsygoApiClient {
     }
 
     debugPrint(
-      '[API] Unauthorized code=$firstCode, attempting token refresh...',
-    );
-    final refreshSuccess = await refreshAccessToken();
-    if (!refreshSuccess) {
+        '[API] Unauthorized code=$firstCode, attempting token refresh...');
+    final refreshOutcome = await refreshAccessTokenWithOutcome();
+    if (refreshOutcome != TokenRefreshOutcome.success) {
+      if (refreshOutcome == TokenRefreshOutcome.invalidSession) {
+        await auth.markLoggedOut();
+      }
       return response;
     }
 
@@ -119,9 +178,15 @@ class PsygoApiClient {
   Future<void> sendVerificationCode(String phone) async {
     Response<Map<String, dynamic>> res;
     try {
+      final authDeviceID = await _getOrCreateAuthDeviceId();
+      final authDevicePlatform = _authDevicePlatform();
       res = await _dio.post<Map<String, dynamic>>(
         '${PsygoConfig.baseUrl}/api/auth/send-sms-code',
-        data: {'phone': phone},
+        data: {
+          'phone': phone,
+          'auth_device_id': authDeviceID,
+          'auth_device_platform': authDevicePlatform,
+        },
       );
     } on DioException catch (e) {
       debugPrint(
@@ -166,18 +231,31 @@ class PsygoApiClient {
 
   /// 短信验证码登录
   Future<AuthResponse> smsLogin(String phone, String code) async {
+    final authDeviceID = await _getOrCreateAuthDeviceId();
+    final authDevicePlatform = _authDevicePlatform();
     final res = await _dio.post<Map<String, dynamic>>(
       '${PsygoConfig.baseUrl}/api/auth/sms-login',
-      data: {'phone': phone, 'code': code},
+      data: {
+        'phone': phone,
+        'code': code,
+        'auth_device_id': authDeviceID,
+        'auth_device_platform': authDevicePlatform,
+      },
     );
     return _handleAuthResponse(res, '登录失败');
   }
 
   /// 一键登录（阿里云）
   Future<AuthResponse> oneClickLogin(String accessToken) async {
+    final authDeviceID = await _getOrCreateAuthDeviceId();
+    final authDevicePlatform = _authDevicePlatform();
     final res = await _dio.post<Map<String, dynamic>>(
       '${PsygoConfig.baseUrl}/api/auth/one-click-login',
-      data: {'access_token': accessToken},
+      data: {
+        'access_token': accessToken,
+        'auth_device_id': authDeviceID,
+        'auth_device_platform': authDevicePlatform,
+      },
     );
     return _handleAuthResponse(res, '登录失败');
   }
@@ -243,18 +321,26 @@ class PsygoApiClient {
   /// Refresh the access token using refresh token
   /// Returns true if refresh was successful, false otherwise
   /// 委托给 TokenManager 统一处理，避免重复逻辑
-  Future<bool> refreshAccessToken() async {
-    try {
-      final success = await TokenManager.instance.refreshAccessToken();
-      if (success) {
-        // 刷新成功，重新加载 auth 状态
-        await _syncAuthState();
-      }
-      return success;
-    } catch (e) {
-      debugPrint('[API] Token refresh failed: $e');
-      return false;
+  Future<TokenRefreshOutcome> refreshAccessTokenWithOutcome() async {
+    final success = await TokenManager.instance.refreshAccessToken();
+    await _syncAuthState();
+    if (success) {
+      return TokenRefreshOutcome.success;
     }
+
+    // TokenManager 在 refresh token 无效时会清空本地 token。
+    final hasAccessToken = (auth.primaryToken ?? '').isNotEmpty;
+    final hasRefreshToken = (auth.refreshToken ?? '').isNotEmpty;
+    if (!auth.isLoggedIn || !hasAccessToken || !hasRefreshToken) {
+      return TokenRefreshOutcome.invalidSession;
+    }
+
+    return TokenRefreshOutcome.transientFailure;
+  }
+
+  Future<bool> refreshAccessToken() async {
+    final outcome = await refreshAccessTokenWithOutcome();
+    return outcome == TokenRefreshOutcome.success;
   }
 
   /// Ensure we have a valid token before making API calls
@@ -281,10 +367,7 @@ class PsygoApiClient {
     final res = await _requestWithAuthRetry((token) {
       return _dio.post<Map<String, dynamic>>(
         '${PsygoConfig.baseUrl}/api/payments/recharge/create',
-        data: {
-          'user_id': userId,
-          'total_amount': amount,
-        },
+        data: {'user_id': userId, 'total_amount': amount},
         options: Options(headers: {'Authorization': 'Bearer $token'}),
       );
     });
@@ -352,10 +435,13 @@ class PsygoApiClient {
     final payload = <String, dynamic>{
       'user_id': userId,
       'content': content,
-      if (replyEmail != null && replyEmail.isNotEmpty) 'reply_email': replyEmail,
+      if (replyEmail != null && replyEmail.isNotEmpty)
+        'reply_email': replyEmail,
       if (category != null && category.isNotEmpty) 'category': category,
-      if (appVersion != null && appVersion.isNotEmpty) 'app_version': appVersion,
-      if (deviceInfo != null && deviceInfo.isNotEmpty) 'device_info': deviceInfo,
+      if (appVersion != null && appVersion.isNotEmpty)
+        'app_version': appVersion,
+      if (deviceInfo != null && deviceInfo.isNotEmpty)
+        'device_info': deviceInfo,
     };
     final useMultipart = attachments.isNotEmpty;
 
@@ -477,10 +563,7 @@ class PsygoApiClient {
   }) async {
     final res = await _dio.get<Map<String, dynamic>>(
       '${PsygoConfig.baseUrl}/api/app/version',
-      queryParameters: {
-        'version': currentVersion,
-        'platform': platform,
-      },
+      queryParameters: {'version': currentVersion, 'platform': platform},
     );
 
     final data = res.data ?? {};
@@ -595,7 +678,18 @@ class PsygoApiClient {
     if (!_isUnauthorizedCode(code)) {
       return;
     }
-    await auth.markLoggedOut();
+    // 10003 表示 refresh token 失效，必须重新登录。
+    // 10002 可能是 access token 过期，先由 refresh 流程处理，避免误登出。
+    if (code == 10003) {
+      await auth.markLoggedOut();
+      return;
+    }
+
+    await _syncAuthState();
+    final hasRefreshToken = (auth.refreshToken ?? '').isNotEmpty;
+    if (!hasRefreshToken) {
+      await auth.markLoggedOut();
+    }
   }
 }
 
@@ -637,10 +731,7 @@ class CreateRechargeOrderRequest {
   final String userId;
   final double totalAmount;
 
-  CreateRechargeOrderRequest({
-    required this.userId,
-    required this.totalAmount,
-  });
+  CreateRechargeOrderRequest({required this.userId, required this.totalAmount});
 
   Map<String, dynamic> toJson() => {
         'user_id': userId,
@@ -834,10 +925,7 @@ class AgreementStatus {
   final bool allAccepted; // 是否已接受所有必需协议
   final List<AgreementAcceptance> agreements; // 各协议的接受状态
 
-  AgreementStatus({
-    required this.allAccepted,
-    required this.agreements,
-  });
+  AgreementStatus({required this.allAccepted, required this.agreements});
 
   factory AgreementStatus.fromJson(Map<String, dynamic> json) {
     final agreementsList = json['agreements'] as List<dynamic>? ?? [];
