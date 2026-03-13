@@ -9,6 +9,9 @@ import 'package:psygo/widgets/settings_switch_list_tile.dart';
 import 'settings_chat.dart';
 
 class SettingsChatView extends StatelessWidget {
+  // 临时隐藏通话设置分组（保留代码，后续可快速恢复）
+  static const bool _showCallSettingsSection = false;
+
   final SettingsChatController controller;
   const SettingsChatView(this.controller, {super.key});
 
@@ -54,24 +57,26 @@ class SettingsChatView extends StatelessWidget {
                 title: L10n.of(context).swipeRightToLeftToReply,
                 setting: AppSettings.swipeRightToLeftToReply,
               ),
-              Divider(color: theme.dividerColor),
-              ListTile(
-                title: Text(
-                  L10n.of(context).calls,
-                  style: TextStyle(
-                    color: theme.colorScheme.secondary,
-                    fontWeight: FontWeight.bold,
+              if (_showCallSettingsSection) ...[
+                Divider(color: theme.dividerColor),
+                ListTile(
+                  title: Text(
+                    L10n.of(context).calls,
+                    style: TextStyle(
+                      color: theme.colorScheme.secondary,
+                      fontWeight: FontWeight.bold,
+                    ),
                   ),
                 ),
-              ),
-              SettingsSwitchListTile.adaptive(
-                title: L10n.of(context).experimentalVideoCalls,
-                onChanged: (b) {
-                  Matrix.of(context).createVoipPlugin();
-                  return;
-                },
-                setting: AppSettings.experimentalVoip,
-              ),
+                SettingsSwitchListTile.adaptive(
+                  title: L10n.of(context).experimentalVideoCalls,
+                  onChanged: (b) {
+                    Matrix.of(context).createVoipPlugin();
+                    return;
+                  },
+                  setting: AppSettings.experimentalVoip,
+                ),
+              ],
             ],
           ),
         ),
