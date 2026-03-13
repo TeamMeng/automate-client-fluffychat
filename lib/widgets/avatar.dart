@@ -22,6 +22,8 @@ class Avatar extends StatelessWidget {
   final Color? backgroundColor;
   final Color? textColor;
   final bool showShadow;
+  final bool showWorkingPulse;
+  final Color? workingPulseColor;
 
   const Avatar({
     this.mxContent,
@@ -37,6 +39,8 @@ class Avatar extends StatelessWidget {
     this.backgroundColor,
     this.textColor,
     this.showShadow = false,
+    this.showWorkingPulse = false,
+    this.workingPulseColor,
     super.key,
   });
 
@@ -55,6 +59,7 @@ class Avatar extends StatelessWidget {
     final presenceUserId = this.presenceUserId;
     final avatarColor = backgroundColor ?? name?.lightColorAvatar;
     final container = Stack(
+      clipBehavior: Clip.none,
       children: [
         Container(
           width: size,
@@ -201,12 +206,93 @@ class Avatar extends StatelessWidget {
           ),
       ],
     );
-    if (onTap == null) return container;
+    final shouldAnimatePulse =
+        showWorkingPulse && !(MediaQuery.maybeOf(context)?.disableAnimations ?? false);
+    final avatarWithPulse = shouldAnimatePulse
+        ? _AvatarWorkingPulse(
+            size: size,
+            color: workingPulseColor ?? theme.colorScheme.tertiary,
+            child: container,
+          )
+        : container;
+
+    if (onTap == null) return avatarWithPulse;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
         onTap: onTap,
-        child: container,
+        child: avatarWithPulse,
+      ),
+    );
+  }
+}
+
+class _AvatarWorkingPulse extends StatefulWidget {
+  final double size;
+  final Color color;
+  final Widget child;
+
+  const _AvatarWorkingPulse({
+    required this.size,
+    required this.color,
+    required this.child,
+  });
+
+  @override
+  State<_AvatarWorkingPulse> createState() => _AvatarWorkingPulseState();
+}
+
+class _AvatarWorkingPulseState extends State<_AvatarWorkingPulse>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _controller = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 1800),
+  )..repeat();
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  Widget _buildPulseRing(double progress, double maxAlpha) {
+    final scale = 1.0 + progress * 0.45;
+    final alpha = (1.0 - progress) * maxAlpha;
+    return Transform.scale(
+      scale: scale,
+      child: Container(
+        width: widget.size,
+        height: widget.size,
+        decoration: BoxDecoration(
+          shape: BoxShape.circle,
+          border: Border.all(
+            color: widget.color.withValues(alpha: alpha),
+            width: 1.8,
+          ),
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return RepaintBoundary(
+      child: AnimatedBuilder(
+        animation: _controller,
+        child: widget.child,
+        builder: (context, child) {
+          final progress = _controller.value;
+          final trailingProgress = (progress + 0.5) % 1.0;
+          return Stack(
+            clipBehavior: Clip.none,
+            alignment: Alignment.center,
+            children: [
+              IgnorePointer(child: _buildPulseRing(progress, 0.36)),
+              IgnorePointer(child: _buildPulseRing(trailingProgress, 0.22)),
+              if (child != null) child,
+            ],
+          );
+        },
       ),
     );
   }

@@ -83,28 +83,17 @@ class Message extends StatelessWidget {
     super.key,
   });
 
-  ({Uri? avatarUrl, String displayName}) _resolveSenderPresentation(User user) {
+  ({Uri? avatarUrl, String displayName, bool isWorkingEmployee})
+      _resolveSenderPresentation(User user) {
+    AgentService.instance.ensureMatrixProfilePresentation(user);
     final agent = AgentService.instance.getAgentByMatrixUserId(user.id);
-    final agentAvatarUri = AgentService.instance.getAgentAvatarUri(user.id);
-
-    String normalizeDisplayName(String candidate) {
-      final trimmed = candidate.trim();
-      if (trimmed.isEmpty || trimmed == user.id) {
-        return user.id.localpart ?? user.id;
-      }
-      return trimmed;
-    }
-
-    if (agent != null) {
-      return (
-        avatarUrl: agentAvatarUri ?? user.avatarUrl,
-        displayName: normalizeDisplayName(agent.displayName),
-      );
-    }
+    final displayName = AgentService.instance.resolveDisplayName(user);
+    final avatarUri = AgentService.instance.resolveAvatarUri(user);
 
     return (
-      avatarUrl: user.avatarUrl,
-      displayName: normalizeDisplayName(user.calcDisplayname()),
+      avatarUrl: avatarUri ?? user.avatarUrl,
+      displayName: displayName,
+      isWorkingEmployee: agent?.isWorking ?? false,
     );
   }
 
@@ -403,6 +392,8 @@ class Message extends StatelessWidget {
                                           child: Avatar(
                                             mxContent: sender.avatarUrl,
                                             name: sender.displayName,
+                                            showWorkingPulse: !event.room.isDirectChat &&
+                                                sender.isWorkingEmployee,
                                             onTap: () =>
                                                 showSenderMenu(context, user),
                                             presenceUserId: user.stateKey,
@@ -434,6 +425,9 @@ class Message extends StatelessWidget {
                                                 child: Avatar(
                                                   mxContent: sender.avatarUrl,
                                                   name: sender.displayName,
+                                                  showWorkingPulse:
+                                                      !event.room.isDirectChat &&
+                                                          sender.isWorkingEmployee,
                                                   onTap: () => showSenderMenu(
                                                     context,
                                                     user,
