@@ -16,19 +16,9 @@ class ParticipantListItem extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final theme = Theme.of(context);
-
-    // 优先使用员工头像和名称
-    final agentAvatarUri = AgentService.instance.getAgentAvatarUri(user.id);
-    final Uri? avatarUrl;
-    final String displayname;
-    if (agentAvatarUri != null) {
-      final agent = AgentService.instance.getAgentByMatrixUserId(user.id);
-      avatarUrl = agentAvatarUri;
-      displayname = agent!.displayName;
-    } else {
-      avatarUrl = user.avatarUrl;
-      displayname = user.calcDisplayname();
-    }
+    AgentService.instance.ensureMatrixProfilePresentation(user);
+    final avatarUrl = AgentService.instance.resolveAvatarUri(user);
+    final displayname = AgentService.instance.resolveDisplayName(user);
 
     final membershipBatch = switch (user.membership) {
       Membership.ban => L10n.of(context).banned,

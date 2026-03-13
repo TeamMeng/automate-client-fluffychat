@@ -8,6 +8,7 @@ import 'package:slugify/slugify.dart';
 import 'package:psygo/config/app_config.dart';
 import 'package:psygo/config/setting_keys.dart';
 import 'package:psygo/l10n/l10n.dart';
+import 'package:psygo/services/agent_service.dart';
 import 'package:psygo/utils/markdown_context_builder.dart';
 import 'package:psygo/utils/platform_infos.dart';
 import 'package:psygo/widgets/mxc_image.dart';
@@ -160,17 +161,19 @@ class InputBar extends StatelessWidget {
     if (userMatch != null) {
       final userSearch = userMatch[1]!.toLowerCase();
       for (final user in room.getParticipants()) {
-        if ((user.displayName != null &&
-                (user.displayName!.toLowerCase().contains(userSearch) ||
-                    slugify(user.displayName!.toLowerCase())
-                        .contains(userSearch))) ||
+        AgentService.instance.ensureMatrixProfilePresentation(user);
+        final resolvedDisplayName = AgentService.instance.resolveDisplayName(user);
+        final resolvedAvatar = AgentService.instance.resolveAvatarUri(user);
+        if ((resolvedDisplayName.toLowerCase().contains(userSearch) ||
+                slugify(resolvedDisplayName.toLowerCase())
+                    .contains(userSearch)) ||
             user.id.split(':')[0].toLowerCase().contains(userSearch)) {
           ret.add({
             'type': 'user',
             'mxid': user.id,
             'mention': user.mention,
-            'displayname': user.displayName,
-            'avatar_url': user.avatarUrl?.toString(),
+            'displayname': resolvedDisplayName,
+            'avatar_url': resolvedAvatar?.toString(),
           });
         }
         if (ret.length > maxResults) {

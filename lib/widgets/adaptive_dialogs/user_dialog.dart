@@ -42,21 +42,21 @@ class UserDialog extends StatelessWidget {
   Widget build(BuildContext context) {
     final client = Matrix.of(context).client;
     final dmRoomId = client.getDirectChatFromUserId(profile.userId);
-
-    // 优先使用员工头像和名称
-    final agentAvatarUri = AgentService.instance.getAgentAvatarUri(profile.userId);
-    final Uri? avatar;
-    final String displayname;
-    if (agentAvatarUri != null) {
-      final agent = AgentService.instance.getAgentByMatrixUserId(profile.userId);
-      avatar = agentAvatarUri;
-      displayname = agent!.displayName;
-    } else {
-      avatar = profile.avatarUrl;
-      displayname = profile.displayName ??
-          profile.userId.localpart ??
-          L10n.of(context).user;
-    }
+    AgentService.instance.ensureMatrixProfilePresentationById(
+      client: client,
+      matrixUserId: profile.userId,
+      fallbackDisplayName: profile.displayName,
+      fallbackAvatarUri: profile.avatarUrl,
+    );
+    final avatar = AgentService.instance.resolveAvatarUriByMatrixUserId(
+      profile.userId,
+      fallbackAvatarUri: profile.avatarUrl,
+    );
+    final displayname = AgentService.instance.resolveDisplayNameByMatrixUserId(
+      profile.userId,
+      fallbackDisplayName:
+          profile.displayName ?? profile.userId.localpart ?? L10n.of(context).user,
+    );
 
     var copied = false;
     final theme = Theme.of(context);

@@ -5,6 +5,7 @@ library;
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:matrix/matrix.dart';
 
 import '../core/config.dart';
 import '../models/agent.dart';
@@ -25,6 +26,11 @@ class AgentService {
 
   /// Matrix User ID -> Agent 的映射缓存
   final Map<String, Agent> _matrixUserIdToAgent = {};
+  final Map<String, _MatrixProfilePresentation> _profilePresentationByUserId =
+      {};
+  final Set<String> _profileLookupInFlight = {};
+  final Map<String, DateTime> _profileLookupLastAttemptAt = {};
+  static const Duration _profileLookupCooldown = Duration(minutes: 1);
 
   /// 是否已初始化
   bool _initialized = false;
@@ -71,7 +77,7 @@ class AgentService {
 
     _agents = allAgents;
     _rebuildMatrixUserIdMap();
-    agentsNotifier.value = List.unmodifiable(_agents);
+    _notifyChanged();
     debugPrint('[AgentService] Loaded ${_agents.length} agents');
   }
 
@@ -106,6 +112,181 @@ class AgentService {
     final key = matrixUserId?.trim() ?? '';
     if (key.isEmpty) return null;
     return _matrixUserIdToAgent[key];
+  }
+
+  /// 按 Matrix User ID 解析展示名称
+  /// 优先级：自己的员工名称 > 远端 profile 缓存 > fallback
+  String resolveDisplayNameByMatrixUserId(
+    String? matrixUserId, {
+    String? fallbackDisplayName,
+  }) {
+    final key = matrixUserId?.trim() ?? '';
+    if (key.isEmpty) {
+      return '';
+    }
+
+    final agent = _matrixUserIdToAgent[key];
+    final ownName = _normalizeDisplayNameCandidate(agent?.displayName, key);
+    if (ownName != null) {
+      return ownName;
+    }
+
+    final remote = _profilePresentationByUserId[key];
+    final remoteName =
+        _normalizeDisplayNameCandidate(remote?.displayName, key);
+    if (remoteName != null) {
+      return remoteName;
+    }
+
+    final fallback = _normalizeDisplayNameCandidate(fallbackDisplayName, key);
+    if (fallback != null) {
+      return fallback;
+    }
+
+    return key.localpart ?? key;
+  }
+
+  /// 按 Matrix User ID 解析展示头像
+  /// 优先级：自己的员工头像 > 远端 profile 缓存 > fallback
+  Uri? resolveAvatarUriByMatrixUserId(
+    String? matrixUserId, {
+    Uri? fallbackAvatarUri,
+  }) {
+    final key = matrixUserId?.trim() ?? '';
+    if (key.isEmpty) {
+      return fallbackAvatarUri;
+    }
+
+    final agent = _matrixUserIdToAgent[key];
+    final ownAvatar = parseAvatarUri(agent?.avatarUrl);
+    if (ownAvatar != null) {
+      return ownAvatar;
+    }
+
+    final remote = _profilePresentationByUserId[key];
+    final remoteAvatar = parseAvatarUri(remote?.avatarUrl);
+    if (remoteAvatar != null) {
+      return remoteAvatar;
+    }
+
+    return fallbackAvatarUri;
+  }
+
+  /// 解析 User 的展示名称（含远端 profile 覆盖）
+  String resolveDisplayName(User user) {
+    return resolveDisplayNameByMatrixUserId(
+      user.id,
+      fallbackDisplayName: user.calcDisplayname(),
+    );
+  }
+
+  /// 解析 User 的展示头像（含远端 profile 覆盖）
+  Uri? resolveAvatarUri(User user) {
+    return resolveAvatarUriByMatrixUserId(
+      user.id,
+      fallbackAvatarUri: user.avatarUrl,
+    );
+  }
+
+  /// 懒加载 Matrix 资料（用于非本人员工的昵称/头像展示）
+  void ensureMatrixProfilePresentation(User user) {
+    ensureMatrixProfilePresentationById(
+      client: user.room.client,
+      matrixUserId: user.id,
+      fallbackDisplayName: user.displayName ?? user.calcDisplayname(),
+      fallbackAvatarUri: user.avatarUrl,
+    );
+  }
+
+  /// 按 Matrix User ID 懒加载 Matrix 资料（带去重与冷却）
+  void ensureMatrixProfilePresentationById({
+    required Client client,
+    required String? matrixUserId,
+    String? fallbackDisplayName,
+    Uri? fallbackAvatarUri,
+  }) {
+    final key = matrixUserId?.trim() ?? '';
+    if (key.isEmpty) {
+      return;
+    }
+    if (_matrixUserIdToAgent.containsKey(key)) {
+      return;
+    }
+    if (_profileLookupInFlight.contains(key)) {
+      return;
+    }
+    final now = DateTime.now();
+    final lastAttemptAt = _profileLookupLastAttemptAt[key];
+    if (lastAttemptAt != null &&
+        now.difference(lastAttemptAt) < _profileLookupCooldown) {
+      return;
+    }
+    _profileLookupLastAttemptAt[key] = now;
+    _profileLookupInFlight.add(key);
+    unawaited(
+      _loadMatrixProfilePresentation(
+        client: client,
+        matrixUserId: key,
+        fallbackDisplayName: fallbackDisplayName,
+        fallbackAvatarUri: fallbackAvatarUri,
+      ),
+    );
+  }
+
+  Future<void> _loadMatrixProfilePresentation({
+    required Client client,
+    required String matrixUserId,
+    String? fallbackDisplayName,
+    Uri? fallbackAvatarUri,
+  }) async {
+    try {
+      final profile = await client.getProfileFromUserId(matrixUserId);
+
+      final displayName = _normalizeDisplayNameCandidate(
+            profile.displayName,
+            matrixUserId,
+          ) ??
+          _normalizeDisplayNameCandidate(fallbackDisplayName, matrixUserId);
+
+      final avatarUrl = _normalizeAvatarUrl(profile.avatarUrl?.toString()) ??
+          _normalizeAvatarUrl(fallbackAvatarUri?.toString());
+
+      if (displayName == null && avatarUrl == null) {
+        return;
+      }
+
+      final previous = _profilePresentationByUserId[matrixUserId];
+      if (previous?.displayName == displayName &&
+          previous?.avatarUrl == avatarUrl) {
+        return;
+      }
+
+      _profilePresentationByUserId[matrixUserId] = _MatrixProfilePresentation(
+        displayName: displayName,
+        avatarUrl: avatarUrl,
+      );
+      _notifyChanged();
+    } catch (e) {
+      debugPrint('[AgentService] Profile lookup failed for $matrixUserId: $e');
+    } finally {
+      _profileLookupInFlight.remove(matrixUserId);
+    }
+  }
+
+  String? _normalizeDisplayNameCandidate(String? candidate, String matrixUserId) {
+    final trimmed = candidate?.trim() ?? '';
+    if (trimmed.isEmpty || trimmed == matrixUserId) {
+      return null;
+    }
+    return trimmed;
+  }
+
+  String? _normalizeAvatarUrl(String? avatarUrl) {
+    final trimmed = avatarUrl?.trim() ?? '';
+    if (trimmed.isEmpty || trimmed == 'null') {
+      return null;
+    }
+    return trimmed;
   }
 
   /// 检查 Matrix User ID 是否是员工
@@ -224,12 +405,29 @@ class AgentService {
         _matrixUserIdToAgent[key] = agent;
       }
     }
+    _notifyChanged();
+  }
+
+  void _notifyChanged() {
     agentsNotifier.value = List.unmodifiable(_agents);
   }
 
   /// 释放资源
   void dispose() {
+    _profilePresentationByUserId.clear();
+    _profileLookupInFlight.clear();
+    _profileLookupLastAttemptAt.clear();
     _repository.dispose();
     agentsNotifier.dispose();
   }
+}
+
+class _MatrixProfilePresentation {
+  final String? displayName;
+  final String? avatarUrl;
+
+  const _MatrixProfilePresentation({
+    this.displayName,
+    this.avatarUrl,
+  });
 }
