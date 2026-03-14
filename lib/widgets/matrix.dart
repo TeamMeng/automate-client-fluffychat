@@ -342,6 +342,16 @@ class MatrixState extends State<Matrix> with WidgetsBindingObserver {
     onLoginStateChanged[name] ??= c.onLoginStateChanged.stream.listen((state) {
       final loggedInWithMultipleClients = widget.clients.length > 1;
       if (state == LoginState.loggedOut) {
+        // 注销推送（防止登出后仍收到推送、防止换号后收到上一个用户的推送）
+        if (PlatformInfos.isMobile) {
+          final pushKey = AliyunPushService.instance.pushKey;
+          if (pushKey != null) {
+            _pushAudit('unregister start pushKey=$pushKey');
+            unawaited(AliyunPushService.instance.unregisterPush(pushKey));
+          }
+          PushStateReporter.instance.stop();
+        }
+
         _cancelSubs(c.clientName);
         widget.clients.remove(c);
         ClientManager.removeClientNameFromStore(c.clientName, store);
@@ -559,18 +569,16 @@ class MatrixState extends State<Matrix> with WidgetsBindingObserver {
     voipPlugin = VoipPlugin(this);
   }
 
-  /// 初始化阿里云推送
+  /// 初始化阿里云推送 SDK
+  ///
+  /// 只负责 SDK 初始化和回调设置，不做推送注册。
+  /// 注册统一由 [ensureAliyunPushRegistered] 在登录成功后触发。
   Future<void> _initAliyunPush() async {
     try {
       // 设置回调函数（必须在 initialize 之前设置）
-      // 1. 获取当前活跃房间 ID（用于判断是否显示通知）
       AliyunPushService.instance.activeRoomIdGetter = () => activeRoomId;
-
-      // 2. 获取当前用户 Matrix ID（用于过滤自己发的消息）
       AliyunPushService.instance.currentUserIdGetter =
           () => clientOrNull?.userID;
-
-      // 3. 通知点击回调（导航到对应房间）
       AliyunPushService.instance.onNotificationTapped = (roomId, eventId) {
         Logs().i('[Matrix] Notification tapped: room=$roomId, event=$eventId');
         PsygoApp.router.go('/rooms/$roomId');
@@ -578,27 +586,9 @@ class MatrixState extends State<Matrix> with WidgetsBindingObserver {
 
       final success = await AliyunPushService.instance.initialize();
       if (success) {
-        Logs().i('[Matrix] Aliyun Push initialized successfully');
-
-        // 如果用户已登录（确保客户端列表不为空）
-        if (widget.clients.isNotEmpty &&
-            client.isLogged() &&
-            client.userID != null) {
-          // 绑定账号用于精准推送
-          await AliyunPushService.instance.bindAccount(client.userID!);
-
-          // 注册推送到后端和 Synapse
-          final pushRegistered =
-              await AliyunPushService.instance.registerPush(client);
-          if (pushRegistered) {
-            Logs().i('[Matrix] Push registration completed');
-          } else {
-            Logs().w('[Matrix] Push registration failed');
-          }
-          _updatePushState();
-        }
+        Logs().i('[Matrix] Aliyun Push SDK initialized');
       } else {
-        Logs().w('[Matrix] Aliyun Push initialization failed');
+        Logs().w('[Matrix] Aliyun Push SDK initialization failed');
       }
     } catch (e, s) {
       Logs().e('[Matrix] Aliyun Push init error', e, s);
@@ -630,74 +620,38 @@ class MatrixState extends State<Matrix> with WidgetsBindingObserver {
   /// 登录成功后注册阿里云推送
   Future<void> _registerAliyunPushAfterLogin(Client c) async {
     try {
-      Logs().i('[Matrix] Registering Aliyun Push after login for ${c.userID}');
-      if (kReleaseMode) {
-        // ignore: avoid_print
-        print(
-            '[PUSH_AUDIT] Matrix register after login start user=${c.userID}');
-      }
+      final userID = c.userID;
+      if (userID == null) return;
 
-      // 确保 SDK 已初始化
+      _pushAudit('register start user=$userID');
+
+      // 确保 SDK 已初始化（首次登录时 _initAliyunPush 可能还未完成）
       if (!AliyunPushService.instance.isInitialized) {
         final initSuccess = await AliyunPushService.instance.initialize();
         if (!initSuccess) {
-          Logs().w('[Matrix] Aliyun Push SDK initialization failed');
-          if (kReleaseMode) {
-            // ignore: avoid_print
-            print(
-                '[PUSH_AUDIT] Matrix register after login abort: init failed');
-          }
+          _pushAudit('register abort: SDK init failed');
           return;
         }
-      }
-
-      // 检查是否有 deviceId
-      if (AliyunPushService.instance.deviceId == null) {
-        Logs().w('[Matrix] Aliyun Push deviceId is null, cannot register');
-        if (kReleaseMode) {
-          // ignore: avoid_print
-          print(
-              '[PUSH_AUDIT] Matrix register after login abort: deviceId null');
-        }
-        return;
-      }
-
-      final userID = c.userID;
-      if (userID == null) {
-        Logs().w('[Matrix] User ID is null, cannot register push');
-        if (kReleaseMode) {
-          // ignore: avoid_print
-          print('[PUSH_AUDIT] Matrix register after login abort: userId null');
-        }
-        return;
       }
 
       // 绑定账号用于精准推送
       await AliyunPushService.instance.bindAccount(userID);
 
       // 注册推送到后端和 Synapse
-      final pushRegistered = await AliyunPushService.instance.registerPush(c);
-      if (pushRegistered) {
-        Logs().i('[Matrix] Push registration completed for $userID');
-        if (kReleaseMode) {
-          // ignore: avoid_print
-          print('[PUSH_AUDIT] Matrix register after login ok');
-        }
-      } else {
-        Logs().w('[Matrix] Push registration failed for $userID');
-        if (kReleaseMode) {
-          // ignore: avoid_print
-          print('[PUSH_AUDIT] Matrix register after login failed');
-        }
-      }
+      final ok = await AliyunPushService.instance.registerPush(c);
+      _pushAudit('register ${ok ? 'ok' : 'failed'} user=$userID');
       _updatePushState();
     } catch (e, s) {
-      Logs().e('[Matrix] Register Aliyun Push after login error', e, s);
-      if (kReleaseMode) {
-        // ignore: avoid_print
-        print('[PUSH_AUDIT] Matrix register after login exception $e');
-      }
+      _pushAudit('register exception $e');
+      Logs().e('[Matrix] Push registration error', e, s);
     }
+  }
+
+  /// Release 模式审计日志
+  void _pushAudit(String message) {
+    if (!kReleaseMode) return;
+    // ignore: avoid_print
+    print('[PUSH_AUDIT:Matrix] $message');
   }
 
   @override
