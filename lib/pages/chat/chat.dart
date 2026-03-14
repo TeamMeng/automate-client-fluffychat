@@ -590,6 +590,29 @@ class ChatController extends State<ChatPageWithRoom>
     }
   }
 
+  bool _canJumpTimelineToBottom() =>
+      scrollController.hasClients &&
+      scrollController.position.hasContentDimensions;
+
+  void _jumpTimelineToBottomSafely({
+    int attempt = 0,
+    VoidCallback? onSuccess,
+  }) {
+    if (!mounted) return;
+    if (_canJumpTimelineToBottom()) {
+      scrollController.jumpTo(0);
+      onSuccess?.call();
+      return;
+    }
+    if (attempt >= 2) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _jumpTimelineToBottomSafely(
+        attempt: attempt + 1,
+        onSuccess: onSuccess,
+      );
+    });
+  }
+
   void _loadDraft() async {
     final prefs = Matrix.of(context).store;
     final draft = prefs.getString('draft_$roomId');
@@ -895,10 +918,7 @@ class ChatController extends State<ChatPageWithRoom>
       if (PlatformInfos.isDesktop) {
         // PC 端：延迟滚动到最新消息，确保 timeline 完全渲染
         Future.delayed(const Duration(milliseconds: 100), () {
-          if (mounted && scrollController.hasClients) {
-            scrollController.jumpTo(0);
-            setReadMarker();
-          }
+          _jumpTimelineToBottomSafely(onSuccess: setReadMarker);
         });
       } else if (readMarkerEventIndex > 1) {
         Logs().v('Scroll up to visible event', readMarkerEventId);
@@ -1883,7 +1903,7 @@ class ChatController extends State<ChatPageWithRoom>
       });
       await loadTimelineFuture;
     }
-    scrollController.jumpTo(0);
+    _jumpTimelineToBottomSafely();
   }
 
   void onEmojiSelected(_, Emoji? emoji) {
