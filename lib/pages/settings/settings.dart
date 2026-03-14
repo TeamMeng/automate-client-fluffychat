@@ -1,15 +1,17 @@
 import 'dart:async';
-import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:matrix/matrix.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 import 'package:provider/provider.dart';
 import 'package:psygo/backend/api_client.dart';
 import 'package:psygo/backend/auth_state.dart';
+import 'package:psygo/core/token_manager.dart';
 import 'package:psygo/l10n/l10n.dart';
+import 'package:psygo/utils/platform_infos.dart';
+import 'package:psygo/utils/window_service.dart';
 import 'package:psygo/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:psygo/widgets/adaptive_dialogs/show_text_input_dialog.dart';
 import 'package:psygo/widgets/future_loading_dialog.dart';
+import 'package:psygo/widgets/fluffy_chat_app.dart';
 import 'package:psygo/widgets/layouts/desktop_layout.dart';
 import '../../widgets/matrix.dart';
 import '../bootstrap/bootstrap_dialog.dart';
@@ -25,6 +27,7 @@ class Settings extends StatefulWidget {
 class SettingsController extends State<Settings> {
   Future<Profile>? profileFuture;
   bool profileUpdated = false;
+  bool _logoutInProgress = false;
 
   void updateProfile() => setState(() {
         profileUpdated = true;
@@ -145,6 +148,12 @@ class SettingsController extends State<Settings> {
   }
 
   void logoutAction() async {
+    if (_logoutInProgress) {
+      debugPrint(
+          '[Settings] Logout already in progress, ignoring duplicate tap');
+      return;
+    }
+
     final l10n = L10n.of(context);
     final theme = Theme.of(context);
 
@@ -278,8 +287,12 @@ class SettingsController extends State<Settings> {
       return;
     }
 
+    if (!mounted) return;
+    setState(() => _logoutInProgress = true);
+
     // 在 context 失效前获取需要的引用
     final auth = context.read<PsygoAuthState>();
+    var needsFallback = false;
 
     try {
       debugPrint('[Settings] Starting logout...');
@@ -290,58 +303,84 @@ class SettingsController extends State<Settings> {
       // - 清除缓存
       // - 切换窗口大小
       // - 跳转到登录页
-      await auth.markLoggedOut();
+      await auth.markLoggedOut().timeout(const Duration(seconds: 8));
+      await auth.load();
+      if (auth.isLoggedIn) {
+        debugPrint(
+            '[Settings] Logout did not clear auth state, fallback required');
+        needsFallback = true;
+      }
 
       debugPrint('[Settings] Logout completed');
     } catch (e) {
       debugPrint('[Settings] Logout error: $e');
+      needsFallback = true;
+    }
+
+    if (needsFallback && mounted) {
+      await _forceLocalLogoutFallback();
+    }
+
+    if (mounted) {
+      setState(() => _logoutInProgress = false);
     }
   }
 
-  void submitFeedbackAction() async {
-    final theme = Theme.of(context);
+  Future<void> _forceLocalLogoutFallback() async {
+    debugPrint('[Settings] Running logout fallback cleanup...');
 
-    // 弹出反馈对话框
-    final result = await showDialog<Map<String, String>>(
-      context: context,
-      barrierDismissible: true,
-      builder: (context) => _FeedbackDialog(theme: theme),
-    );
+    final auth = context.read<PsygoAuthState>();
 
-    if (result == null) return;
-
-    final content = result['content'] ?? '';
-    final category = result['category'] ?? 'other';
-    final replyEmail = result['reply_email'];
-
-    if (content.isEmpty) return;
-
-    // 获取设备信息
-    String? deviceInfo;
-    String? appVersion;
+    // 1) 强制清理 token（本地）
     try {
-      final packageInfo = await PackageInfo.fromPlatform();
-      appVersion = '${packageInfo.version}+${packageInfo.buildNumber}';
-      deviceInfo =
-          '${Platform.operatingSystem} ${Platform.operatingSystemVersion}';
-    } catch (_) {}
+      await TokenManager.instance.clearTokens();
+    } catch (e) {
+      debugPrint('[Settings] Fallback clear token error: $e');
+    }
 
-    final apiClient = context.read<PsygoApiClient>();
-    final success = await showFutureLoadingDialog(
-      context: context,
-      future: () => apiClient.submitFeedback(
-        content: content,
-        category: category,
-        replyEmail: replyEmail,
-        appVersion: appVersion,
-        deviceInfo: deviceInfo,
-      ),
-    );
+    // 2) 再次清理认证状态（幂等）
+    try {
+      await auth.markLoggedOut().timeout(const Duration(seconds: 3));
+    } catch (e) {
+      debugPrint('[Settings] Fallback auth clear error: $e');
+    }
 
-    if (success.error == null) {
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(L10n.of(context).settingsFeedbackSubmitted)),
-      );
+    // 3) 强制清理 Matrix 客户端本地状态
+    try {
+      final matrix = Matrix.of(context);
+      final clients = List<Client>.from(matrix.widget.clients);
+      for (final client in clients) {
+        try {
+          if (client.isLogged()) {
+            await client.logout().timeout(const Duration(seconds: 3));
+          }
+        } catch (logoutError) {
+          debugPrint('[Settings] Fallback matrix logout error: $logoutError');
+          try {
+            await client.clear().timeout(const Duration(seconds: 3));
+          } catch (clearError) {
+            debugPrint('[Settings] Fallback matrix clear error: $clearError');
+          }
+        }
+      }
+    } catch (e) {
+      debugPrint('[Settings] Fallback matrix cleanup error: $e');
+    }
+
+    if (!mounted) {
+      return;
+    }
+
+    // 4) 最后兜底导航，确保用户离开当前页面
+    try {
+      if (PlatformInfos.isDesktop) {
+        await WindowService.switchToLoginWindow();
+        PsygoApp.router.go('/login-signup');
+      } else {
+        PsygoApp.router.go('/');
+      }
+    } catch (e) {
+      debugPrint('[Settings] Fallback navigation error: $e');
     }
   }
 
@@ -399,252 +438,5 @@ class SettingsController extends State<Settings> {
       profileFuture ??= client.getProfileFromUserId(userID);
     }
     return SettingsView(this);
-  }
-}
-
-enum AvatarAction { camera, file, remove }
-
-/// 反馈对话框
-class _FeedbackDialog extends StatefulWidget {
-  final ThemeData theme;
-
-  const _FeedbackDialog({required this.theme});
-
-  @override
-  State<_FeedbackDialog> createState() => _FeedbackDialogState();
-}
-
-class _FeedbackDialogState extends State<_FeedbackDialog> {
-  final _contentController = TextEditingController();
-  final _emailController = TextEditingController();
-  String _selectedCategory = 'suggestion';
-
-  final _categories = [
-    {'value': 'bug', 'icon': Icons.bug_report_outlined},
-    {'value': 'suggestion', 'icon': Icons.lightbulb_outlined},
-    {'value': 'complaint', 'icon': Icons.report_outlined},
-    {'value': 'other', 'icon': Icons.more_horiz},
-  ];
-
-  @override
-  void dispose() {
-    _contentController.dispose();
-    _emailController.dispose();
-    super.dispose();
-  }
-
-  String _categoryLabel(L10n l10n, String value) {
-    switch (value) {
-      case 'bug':
-        return l10n.settingsFeedbackTypeBug;
-      case 'suggestion':
-        return l10n.settingsFeedbackTypeSuggestion;
-      case 'complaint':
-        return l10n.settingsFeedbackTypeComplaint;
-      default:
-        return l10n.settingsFeedbackTypeOther;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    final theme = widget.theme;
-    final l10n = L10n.of(context);
-
-    return Dialog(
-      shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(28),
-      ),
-      insetPadding: const EdgeInsets.symmetric(horizontal: 24),
-      child: ConstrainedBox(
-        constraints: const BoxConstraints(maxWidth: 480),
-        child: Padding(
-          padding: const EdgeInsets.all(24),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              // 标题
-              Row(
-                children: [
-                  Icon(
-                    Icons.feedback_outlined,
-                    color: theme.colorScheme.primary,
-                    size: 28,
-                  ),
-                  const SizedBox(width: 12),
-                  Text(
-                    l10n.settingsFeedbackTitle,
-                    style: theme.textTheme.titleLarge?.copyWith(
-                      fontWeight: FontWeight.w600,
-                    ),
-                  ),
-                ],
-              ),
-              const SizedBox(height: 20),
-
-              // 可滚动内容区域
-              Flexible(
-                child: ScrollConfiguration(
-                  behavior: ScrollConfiguration.of(context)
-                      .copyWith(scrollbars: false),
-                  child: SingleChildScrollView(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        // 反馈类型选择
-                        Text(
-                          l10n.settingsFeedbackType,
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Wrap(
-                          spacing: 8,
-                          runSpacing: 8,
-                          children: _categories.map((cat) {
-                            final isSelected =
-                                _selectedCategory == cat['value'];
-                            return ChoiceChip(
-                              label: Row(
-                                mainAxisSize: MainAxisSize.min,
-                                children: [
-                                  Icon(
-                                    cat['icon'] as IconData,
-                                    size: 16,
-                                    color: isSelected
-                                        ? theme.colorScheme.onPrimary
-                                        : theme.colorScheme.onSurface,
-                                  ),
-                                  const SizedBox(width: 4),
-                                  Text(
-                                    _categoryLabel(
-                                        l10n, cat['value'] as String),
-                                  ),
-                                ],
-                              ),
-                              selected: isSelected,
-                              onSelected: (selected) {
-                                if (selected) {
-                                  setState(() => _selectedCategory =
-                                      cat['value'] as String);
-                                }
-                              },
-                            );
-                          }).toList(),
-                        ),
-                        const SizedBox(height: 16),
-
-                        // 反馈内容
-                        Text(
-                          l10n.settingsFeedbackContent,
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        TextField(
-                          controller: _contentController,
-                          maxLines: 4,
-                          maxLength: 500,
-                          decoration: InputDecoration(
-                            hintText: l10n.settingsFeedbackContentHint,
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                        ),
-                        const SizedBox(height: 16),
-
-                        // 回复邮箱（可选）
-                        Text(
-                          l10n.settingsFeedbackReplyEmailOptional,
-                          style: theme.textTheme.bodyMedium?.copyWith(
-                            fontWeight: FontWeight.w500,
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        TextField(
-                          controller: _emailController,
-                          keyboardType: TextInputType.emailAddress,
-                          decoration: InputDecoration(
-                            hintText: l10n.settingsFeedbackReplyEmailHint,
-                            border: OutlineInputBorder(
-                              borderRadius: BorderRadius.circular(12),
-                            ),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ),
-                ),
-              ),
-              const SizedBox(height: 24),
-
-              // 按钮（固定在底部）
-              Row(
-                children: [
-                  Expanded(
-                    child: TextButton(
-                      onPressed: () => Navigator.of(context).pop(),
-                      style: TextButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        backgroundColor:
-                            theme.colorScheme.surfaceContainerHighest,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      child: Text(
-                        l10n.cancel,
-                        style: TextStyle(
-                          color: theme.colorScheme.onSurface,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: FilledButton(
-                      onPressed: () {
-                        if (_contentController.text.trim().isEmpty) {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text(
-                                l10n.settingsFeedbackContentRequired,
-                              ),
-                            ),
-                          );
-                          return;
-                        }
-                        Navigator.of(context).pop({
-                          'content': _contentController.text.trim(),
-                          'category': _selectedCategory,
-                          'reply_email': _emailController.text.trim(),
-                        });
-                      },
-                      style: FilledButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 14),
-                        backgroundColor: theme.colorScheme.primary,
-                        shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12),
-                        ),
-                      ),
-                      child: Text(
-                        l10n.submit,
-                        style: const TextStyle(fontWeight: FontWeight.w600),
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ],
-          ),
-        ),
-      ),
-    );
   }
 }

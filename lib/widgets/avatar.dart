@@ -1,4 +1,5 @@
 import 'package:flutter/material.dart';
+import 'package:loading_animation_widget/loading_animation_widget.dart';
 
 import 'package:matrix/matrix.dart';
 
@@ -22,6 +23,8 @@ class Avatar extends StatelessWidget {
   final Color? backgroundColor;
   final Color? textColor;
   final bool showShadow;
+  final bool showWorkingPulse;
+  final Color? workingPulseColor;
 
   const Avatar({
     this.mxContent,
@@ -37,6 +40,8 @@ class Avatar extends StatelessWidget {
     this.backgroundColor,
     this.textColor,
     this.showShadow = false,
+    this.showWorkingPulse = false,
+    this.workingPulseColor,
     super.key,
   });
 
@@ -55,6 +60,7 @@ class Avatar extends StatelessWidget {
     final presenceUserId = this.presenceUserId;
     final avatarColor = backgroundColor ?? name?.lightColorAvatar;
     final container = Stack(
+      clipBehavior: Clip.none,
       children: [
         Container(
           width: size,
@@ -201,12 +207,136 @@ class Avatar extends StatelessWidget {
           ),
       ],
     );
-    if (onTap == null) return container;
+    final shouldAnimatePulse =
+        showWorkingPulse && !(MediaQuery.maybeOf(context)?.disableAnimations ?? false);
+    final avatarWithPulse = showWorkingPulse
+        ? _AvatarWorkingDots(
+            size: size,
+            color: workingPulseColor ?? theme.colorScheme.tertiary,
+            animated: shouldAnimatePulse,
+            child: container,
+          )
+        : container;
+
+    if (onTap == null) return avatarWithPulse;
     return MouseRegion(
       cursor: SystemMouseCursors.click,
       child: GestureDetector(
         onTap: onTap,
-        child: container,
+        child: avatarWithPulse,
+      ),
+    );
+  }
+}
+
+class _AvatarWorkingDots extends StatelessWidget {
+  final double size;
+  final Color color;
+  final bool animated;
+  final Widget child;
+
+  const _AvatarWorkingDots({
+    required this.size,
+    required this.color,
+    required this.animated,
+    required this.child,
+  });
+
+  Widget _buildStaticDots() {
+    final dotSizes = [
+      (size * 0.12).clamp(4.4, 7.4).toDouble(),
+      (size * 0.19).clamp(7.4, 11.6).toDouble(),
+      (size * 0.26).clamp(10.2, 15.4).toDouble(),
+    ];
+    final dotTones = [0.70, 0.84, 0.96];
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        for (var i = 0; i < dotSizes.length; i++)
+          Container(
+            width: dotSizes[i],
+            height: dotSizes[i],
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: dotTones[i]),
+              shape: BoxShape.circle,
+            ),
+          ),
+      ],
+    );
+  }
+
+  Widget _buildDots(BuildContext context) {
+    final theme = Theme.of(context);
+    final isDark = theme.brightness == Brightness.dark;
+    final badgeWidth = size * 0.58;
+    final badgeHeight = size * 0.27;
+    final shellColor = isDark
+        ? theme.colorScheme.surfaceContainerHighest.withValues(alpha: 0.68)
+        : theme.colorScheme.surface.withValues(alpha: 0.92);
+    final borderColor = isDark
+        ? theme.colorScheme.onSurface.withValues(alpha: 0.16)
+        : Colors.black.withValues(alpha: 0.06);
+
+    return IgnorePointer(
+        child: Container(
+          width: badgeWidth,
+          height: badgeHeight,
+          padding: EdgeInsets.symmetric(
+            horizontal: badgeWidth * 0.11,
+            vertical: badgeHeight * 0.08,
+          ),
+          decoration: BoxDecoration(
+            color: shellColor,
+            borderRadius: BorderRadius.circular(badgeHeight * 0.55),
+            border: Border.all(
+              color: borderColor,
+              width: 1,
+            ),
+            boxShadow: [
+              BoxShadow(
+                color: Colors.black.withValues(alpha: isDark ? 0.22 : 0.10),
+                blurRadius: 8,
+                offset: const Offset(0, 3),
+              ),
+            ],
+          ),
+          child: animated
+              ? Center(
+                  child: LoadingAnimationWidget.staggeredDotsWave(
+                    color: color,
+                    size: (badgeHeight * 1.90).clamp(16.0, 34.0),
+                  ),
+                )
+              : _buildStaticDots(),
+        ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final dotsHeight = size * 0.22;
+    return RepaintBoundary(
+      child: SizedBox(
+        width: size,
+        height: size + dotsHeight * 0.75,
+        child: Stack(
+          alignment: Alignment.topCenter,
+          clipBehavior: Clip.none,
+          children: [
+            Positioned(
+              top: 0,
+              child: SizedBox(
+                width: size,
+                height: size,
+                child: child,
+              ),
+            ),
+            Positioned(
+              bottom: 0,
+              child: _buildDots(context),
+            ),
+          ],
+        ),
       ),
     );
   }

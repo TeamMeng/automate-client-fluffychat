@@ -141,10 +141,20 @@ class AliyunPushService {
       if (code == kAliyunPushSuccessCode) {
         Logs().i('[AliyunPush] SDK initialized successfully');
         _audit('init success');
-        _initialized = true;
+        // 设置日志级别（调试时可开启）
+        if (kDebugMode) {
+          await _aliyunPush.setLogLevel(AliyunPushLogLevel.debug);
+        }
 
-        // 获取设备 ID
+        // 获取设备 ID — 没有 deviceId 推送无法工作
         await _fetchDeviceId();
+        if (_deviceId == null || _deviceId!.isEmpty) {
+          Logs().e('[AliyunPush] Device ID is null after init, push will not work');
+          _audit('init abort: deviceId null');
+          return false;
+        }
+
+        _initialized = true;
 
         // 初始化厂商通道（Android 专用，支持 vivo/华为/小米等离线推送）
         if (Platform.isAndroid) {
@@ -160,11 +170,6 @@ class AliyunPushService {
           }
         } catch (e) {
           // 忽略清除角标失败
-        }
-
-        // 设置日志级别（调试时可开启）
-        if (kDebugMode) {
-          await _aliyunPush.setLogLevel(AliyunPushLogLevel.debug);
         }
 
         return true;
@@ -908,8 +913,17 @@ class AliyunPushService {
       return false;
     }
 
-    // Step 2: 注册到 Synapse
-    return await registerPusherToSynapse(client, pushKey);
+    // Step 2: 注册到 Synapse（失败时重试一次，间隔 2 秒）
+    var synapseOk = await registerPusherToSynapse(client, pushKey);
+    if (!synapseOk) {
+      _audit('registerPush synapse failed, retry in 2s');
+      await Future.delayed(const Duration(seconds: 2));
+      synapseOk = await registerPusherToSynapse(client, pushKey);
+    }
+    if (!synapseOk) {
+      _audit('registerPush synapse retry also failed');
+    }
+    return synapseOk;
   }
 
   /// 注销推送

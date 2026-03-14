@@ -37,9 +37,11 @@ import 'package:psygo/utils/adaptive_bottom_sheet.dart';
 import 'package:psygo/utils/error_reporter.dart';
 import 'package:psygo/utils/fluffy_share.dart';
 import 'package:psygo/utils/file_selector.dart';
+import 'package:psygo/utils/chat_upload_limits.dart';
 import 'package:psygo/utils/matrix_sdk_extensions/event_extension.dart';
 import 'package:psygo/utils/matrix_sdk_extensions/filtered_timeline_extension.dart';
 import 'package:psygo/utils/matrix_sdk_extensions/matrix_locals.dart';
+import 'package:psygo/utils/matrix_input_mention.dart';
 import 'package:psygo/utils/other_party_can_receive.dart';
 import 'package:psygo/utils/platform_infos.dart';
 import 'package:psygo/utils/show_scaffold_dialog.dart';
@@ -154,6 +156,7 @@ class ChatController extends State<ChatPageWithRoom>
   bool currentlyTyping = false;
   bool dragging = false;
   late final VoidCallback _agentServiceListener;
+  bool _groupLiveStatusWatcherAttached = false;
 
   // Agent Web entry (reverse-tunnel) state.
   final AgentRepository _webEntryRepository = AgentRepository();
@@ -162,7 +165,9 @@ class ChatController extends State<ChatPageWithRoom>
   bool _webEntryLoading = false;
   String? _webEntryUrl;
   DateTime? _lastWebEntryHintAt;
+  DateTime? _lastRestingFeatureHintAt;
   static const Duration _webEntryHintCooldown = Duration(seconds: 2);
+  static const Duration _restingFeatureHintCooldown = Duration(seconds: 2);
   final GlobalKey chatRoomGuideContainerKey = GlobalKey();
   final GlobalKey workStatusGuideKey = GlobalKey();
   final GlobalKey webEntryGuideKey = GlobalKey();
@@ -195,14 +200,11 @@ class ChatController extends State<ChatPageWithRoom>
 
   bool _blockFileIfResting() {
     if (!isAgentResting) return false;
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(L10n.of(context).guideRestingFeatureUnavailable),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
+    _showRestingFeatureUnavailableHint();
     return true;
   }
+
+  bool blockFileIfResting() => _blockFileIfResting();
 
   Agent? get webEntryAgent {
     final directChatMatrixID = room.directChatMatrixID;
@@ -227,6 +229,17 @@ class ChatController extends State<ChatPageWithRoom>
       return true;
     }
     _lastWebEntryHintAt = now;
+    return false;
+  }
+
+  bool _shouldThrottleRestingFeatureHint() {
+    final now = DateTime.now();
+    final lastHintAt = _lastRestingFeatureHintAt;
+    if (lastHintAt != null &&
+        now.difference(lastHintAt) < _restingFeatureHintCooldown) {
+      return true;
+    }
+    _lastRestingFeatureHintAt = now;
     return false;
   }
 
@@ -311,12 +324,32 @@ class ChatController extends State<ChatPageWithRoom>
       ..showSnackBar(
         SnackBar(
           duration: const Duration(seconds: 2),
-          content: PlatformInfos.isMobile
-              ? InkWell(
-                  onTap: messenger.hideCurrentSnackBar,
-                  child: Text(message),
-                )
-              : Text(message),
+          behavior: SnackBarBehavior.floating,
+          content: InkWell(
+            onTap: messenger.hideCurrentSnackBar,
+            child: Text(message),
+          ),
+        ),
+      );
+  }
+
+  void _showRestingFeatureUnavailableHint() {
+    if (_shouldThrottleRestingFeatureHint()) {
+      return;
+    }
+    final messenger = ScaffoldMessenger.maybeOf(context);
+    if (messenger == null) return;
+
+    messenger
+      ..hideCurrentSnackBar()
+      ..showSnackBar(
+        SnackBar(
+          duration: const Duration(seconds: 2),
+          behavior: SnackBarBehavior.floating,
+          content: InkWell(
+            onTap: messenger.hideCurrentSnackBar,
+            child: Text(L10n.of(context).guideRestingFeatureUnavailable),
+          ),
         ),
       );
   }
@@ -557,6 +590,29 @@ class ChatController extends State<ChatPageWithRoom>
     }
   }
 
+  bool _canJumpTimelineToBottom() =>
+      scrollController.hasClients &&
+      scrollController.position.hasContentDimensions;
+
+  void _jumpTimelineToBottomSafely({
+    int attempt = 0,
+    VoidCallback? onSuccess,
+  }) {
+    if (!mounted) return;
+    if (_canJumpTimelineToBottom()) {
+      scrollController.jumpTo(0);
+      onSuccess?.call();
+      return;
+    }
+    if (attempt >= 2) return;
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _jumpTimelineToBottomSafely(
+        attempt: attempt + 1,
+        onSuccess: onSuccess,
+      );
+    });
+  }
+
   void _loadDraft() async {
     final prefs = Matrix.of(context).store;
     final draft = prefs.getString('draft_$roomId');
@@ -672,6 +728,10 @@ class ChatController extends State<ChatPageWithRoom>
     );
 
     sendingClient = Matrix.of(context).client;
+    if (room.directChatMatrixID == null) {
+      AgentService.instance.attachLiveStatusWatcher();
+      _groupLiveStatusWatcherAttached = true;
+    }
     final lastEventThreadId =
         room.lastEvent?.relationshipType == RelationshipTypes.thread
             ? room.lastEvent?.relationshipEventId
@@ -1009,6 +1069,10 @@ class ChatController extends State<ChatPageWithRoom>
 
   @override
   void dispose() {
+    if (_groupLiveStatusWatcherAttached) {
+      AgentService.instance.detachLiveStatusWatcher();
+      _groupLiveStatusWatcherAttached = false;
+    }
     AgentService.instance.agentsNotifier.removeListener(_agentServiceListener);
     _webEntryRepository.dispose();
     timeline?.cancelSubscriptions();
@@ -1115,6 +1179,14 @@ class ChatController extends State<ChatPageWithRoom>
       );
       return;
     }
+    if (data.length > kChatAttachmentMaxUploadBytes) {
+      final scaffoldMessenger = ScaffoldMessenger.of(context);
+      _showAttachmentError(
+        scaffoldMessenger,
+        FileTooBigMatrixException(data.length, kChatAttachmentMaxUploadBytes),
+      );
+      return;
+    }
     final file = MatrixFile(
       mimeType: content.mimeType,
       bytes: data,
@@ -1204,9 +1276,13 @@ class ChatController extends State<ChatPageWithRoom>
       parseCommands = false;
     }
 
+    final outgoingText = replaceInputMentionsWithMatrixIds(
+      room: room,
+      text: sendController.text,
+    );
     // ignore: unawaited_futures
     room.sendTextEvent(
-      sendController.text,
+      outgoingText,
       inReplyTo: replyEvent,
       editEventId: editEvent?.eventId,
       parseCommands: parseCommands,
@@ -1238,8 +1314,7 @@ class ChatController extends State<ChatPageWithRoom>
       }
 
       _showLoadingSnackBar(scaffoldMessenger, l10n.prepareSendingAttachment);
-      final clientConfig = await room.client.getConfig();
-      final maxUploadSize = clientConfig.mUploadSize ?? 100 * 1000 * 1000;
+      const maxUploadSize = kChatAttachmentMaxUploadBytes;
 
       final attachments = List<PendingAttachment>.from(_pendingAttachments);
       for (var i = 0; i < attachments.length; i++) {
@@ -1429,6 +1504,7 @@ class ChatController extends State<ChatPageWithRoom>
   }
 
   void openCameraAction() async {
+    if (_blockFileIfResting()) return;
     // Make sure the textfield is unfocused before opening the camera
     FocusScope.of(context).requestFocus(FocusNode());
     final file = await ImagePicker().pickImage(source: ImageSource.camera);
@@ -1447,6 +1523,7 @@ class ChatController extends State<ChatPageWithRoom>
   }
 
   void openVideoCameraAction() async {
+    if (_blockFileIfResting()) return;
     // Make sure the textfield is unfocused before opening the camera
     FocusScope.of(context).requestFocus(FocusNode());
     final file = await ImagePicker().pickVideo(
@@ -1482,6 +1559,13 @@ class ChatController extends State<ChatPageWithRoom>
     );
     final bytes = bytesResult.result;
     if (bytes == null) return;
+    if (bytes.length > kChatAttachmentMaxUploadBytes) {
+      _showAttachmentError(
+        scaffoldMessenger,
+        FileTooBigMatrixException(bytes.length, kChatAttachmentMaxUploadBytes),
+      );
+      return;
+    }
 
     final file = MatrixAudioFile(
       bytes: bytes,
@@ -1837,7 +1921,7 @@ class ChatController extends State<ChatPageWithRoom>
       });
       await loadTimelineFuture;
     }
-    scrollController.jumpTo(0);
+    _jumpTimelineToBottomSafely();
   }
 
   void onEmojiSelected(_, Emoji? emoji) {
@@ -1968,8 +2052,6 @@ class ChatController extends State<ChatPageWithRoom>
   }
 
   void onAddPopupMenuButtonSelected(AddPopupMenuActions choice) {
-    room.client.getConfig();
-
     switch (choice) {
       case AddPopupMenuActions.image:
         sendFileAction(type: FileSelectorType.images);
@@ -2156,6 +2238,14 @@ class ChatController extends State<ChatPageWithRoom>
     }
   }
 
+  void insertMentionTextForUser(User user) {
+    final mention = buildInputMentionByUser(
+      room: room,
+      user: user,
+    );
+    insertMentionText(mention);
+  }
+
   void sendEmployeeWorkTemplateMessage(String text) {
     final trimmedText = text.trim();
     if (trimmedText.isEmpty) return;
@@ -2164,8 +2254,12 @@ class ChatController extends State<ChatPageWithRoom>
       closeWebEntry();
     }
 
+    final outgoingText = replaceInputMentionsWithMatrixIds(
+      room: room,
+      text: trimmedText,
+    );
     room.sendTextEvent(
-      trimmedText,
+      outgoingText,
       parseCommands: false,
       threadRootEventId: activeThreadId,
     );

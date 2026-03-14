@@ -23,6 +23,7 @@ import 'package:psygo/pages/new_group/new_group.dart';
 import 'package:psygo/pages/new_private_chat/new_private_chat.dart';
 import 'package:psygo/pages/settings/settings.dart';
 import 'package:psygo/pages/settings_chat/settings_chat.dart';
+import 'package:psygo/pages/settings_feedback/settings_feedback.dart';
 import 'package:psygo/pages/settings_notifications/settings_notifications.dart';
 import 'package:psygo/pages/settings_style/settings_style.dart';
 import 'package:psygo/widgets/config_viewer.dart';
@@ -149,9 +150,18 @@ abstract class AppRoutes {
         ];
         // 聊天详情和搜索页面的子路由也需要排除
         final excludedSuffixes = ['/details', '/search', '/invite', '/encryption'];
+        final excludedSubPathMarkers = [
+          '/details/',
+          '/search/',
+          '/invite/',
+          '/encryption/',
+        ];
         final shouldUseDesktopLayout = FluffyThemes.isColumnMode(context) &&
             !excludedPaths.any((p) => path.startsWith(p)) &&
-            !excludedSuffixes.any((s) => path.endsWith(s));
+            !excludedSuffixes.any(
+              (s) => path.endsWith(s) || locationPath.endsWith(s),
+            ) &&
+            !excludedSubPathMarkers.any(locationPath.contains);
 
         return noTransitionPageBuilder(
           context,
@@ -265,6 +275,15 @@ abstract class AppRoutes {
                         context,
                         state,
                         const SettingsChat(),
+                      ),
+                      redirect: loggedOutRedirect,
+                    ),
+                    GoRoute(
+                      path: 'feedback',
+                      pageBuilder: (context, state) => defaultPageBuilder(
+                        context,
+                        state,
+                        const SettingsFeedback(),
                       ),
                       redirect: loggedOutRedirect,
                     ),

@@ -116,7 +116,9 @@ class AgentRepository {
       if (status == 'failed') {
         final error = (data['error'] as String?)?.trim();
         throw ApiException(
-            -1, error?.isNotEmpty == true ? error! : 'Operation failed');
+          -1,
+          error?.isNotEmpty == true ? error! : 'Operation failed',
+        );
       }
 
       await Future.delayed(const Duration(seconds: 1));
