@@ -91,17 +91,20 @@ post_install do |installer|
     end
   end
 
-  # Xcode upload check requires a dSYM for WebRTC.framework.
-  # The vendored WebRTC.xcframework from WebRTC-SDK does not ship one,
-  # so generate a matching dSYM during archive after Pods frameworks are embedded.
+  # Xcode upload check may fail if third-party vendored frameworks do not ship dSYMs.
+  # Generate missing dSYMs for embedded frameworks after Pods frameworks are copied.
   runner_project_path = File.join(__dir__, 'Runner.xcodeproj')
   if File.exist?(runner_project_path)
     runner_project = Xcodeproj::Project.open(runner_project_path)
     runner_target = runner_project.targets.find { |t| t.name == 'Runner' }
     if runner_target
-      phase_name = 'Generate WebRTC dSYM'
+      phase_name = 'Generate Embedded Framework dSYMs'
       phase = runner_target.shell_script_build_phases.find { |p| p.name == phase_name }
       phase ||= runner_target.new_shell_script_build_phase(phase_name)
+      legacy_phase = runner_target.shell_script_build_phases.find { |p| p.name == 'Generate WebRTC dSYM' }
+      if legacy_phase && legacy_phase != phase
+        runner_target.build_phases.delete(legacy_phase)
+      end
 
       phase.shell_script = <<~SCRIPT
         set -euo pipefail
@@ -110,21 +113,37 @@ post_install do |installer|
           exit 0
         fi
 
-        APP_FRAMEWORK_BIN="${TARGET_BUILD_DIR}/${WRAPPER_NAME}/Frameworks/WebRTC.framework/WebRTC"
-        WEBRTC_DSYM_DIR="${DWARF_DSYM_FOLDER_PATH}/WebRTC.framework.dSYM"
-
-        if [ ! -f "${APP_FRAMEWORK_BIN}" ]; then
-          echo "WebRTC.framework not found at ${APP_FRAMEWORK_BIN}, skip dSYM generation."
+        APP_FRAMEWORKS_DIR="${TARGET_BUILD_DIR}/${WRAPPER_NAME}/Frameworks"
+        if [ ! -d "${APP_FRAMEWORKS_DIR}" ]; then
+          echo "Frameworks directory not found at ${APP_FRAMEWORKS_DIR}, skip dSYM generation."
           exit 0
         fi
 
-        rm -rf "${WEBRTC_DSYM_DIR}"
-        dsymutil "${APP_FRAMEWORK_BIN}" -o "${WEBRTC_DSYM_DIR}"
-        echo "✅ Generated WebRTC dSYM: ${WEBRTC_DSYM_DIR}"
+        find "${APP_FRAMEWORKS_DIR}" -maxdepth 1 -type d -name "*.framework" | while read -r FRAMEWORK_DIR; do
+          FRAMEWORK_NAME="$(basename "${FRAMEWORK_DIR}" .framework)"
+          FRAMEWORK_BIN="${FRAMEWORK_DIR}/${FRAMEWORK_NAME}"
+          FRAMEWORK_DSYM="${DWARF_DSYM_FOLDER_PATH}/${FRAMEWORK_NAME}.framework.dSYM"
+
+          if [ ! -f "${FRAMEWORK_BIN}" ]; then
+            echo "Skip ${FRAMEWORK_NAME}: binary not found at ${FRAMEWORK_BIN}"
+            continue
+          fi
+
+          if [ -d "${FRAMEWORK_DSYM}" ]; then
+            echo "dSYM already exists for ${FRAMEWORK_NAME}, skip."
+            continue
+          fi
+
+          if dsymutil "${FRAMEWORK_BIN}" -o "${FRAMEWORK_DSYM}"; then
+            echo "✅ Generated dSYM for ${FRAMEWORK_NAME}: ${FRAMEWORK_DSYM}"
+          else
+            echo "⚠️ Failed to generate dSYM for ${FRAMEWORK_NAME}, skip."
+          fi
+        done
       SCRIPT
       phase.show_env_vars_in_log = '0'
-      phase.input_paths = ['${TARGET_BUILD_DIR}/${WRAPPER_NAME}/Frameworks/WebRTC.framework/WebRTC']
-      phase.output_paths = ['${DWARF_DSYM_FOLDER_PATH}/WebRTC.framework.dSYM']
+      phase.input_paths = ['${TARGET_BUILD_DIR}/${WRAPPER_NAME}/Frameworks']
+      phase.output_paths = []
 
       embed_pods_phase = runner_target.shell_script_build_phases.find do |p|
         p.name == '[CP] Embed Pods Frameworks'
@@ -136,7 +155,7 @@ post_install do |installer|
       end
 
       runner_project.save
-      puts "✅ 已配置 WebRTC dSYM 生成脚本"
+      puts "✅ 已配置 Embedded Framework dSYM 生成脚本"
     end
   end
 

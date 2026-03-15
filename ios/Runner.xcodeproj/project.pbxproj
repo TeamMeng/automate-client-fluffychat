@@ -24,6 +24,20 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
+		9614734E2F65786B005CFCAE /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = CE730743396118E3861E43E3 /* Pods.xcodeproj */;
+			proxyType = 2;
+			remoteGlobalIDString = 4FE20B1CF8B318A8D9591ED1587D7592;
+			remoteInfo = sqflite_darwin;
+		};
+		961473502F65786B005CFCAE /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = CE730743396118E3861E43E3 /* Pods.xcodeproj */;
+			proxyType = 2;
+			remoteGlobalIDString = 071549DBDD4BFC0BD7D2715539015DC2;
+			remoteInfo = "sqflite_darwin-sqflite_darwin_privacy";
+		};
 		967A025B2F26015400DD7EEA /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
 			containerPortal = CE730743396118E3861E43E3 /* Pods.xcodeproj */;
@@ -711,6 +725,8 @@
 				967A02C42F26015400DD7EEA /* share_plus_privacy.bundle */,
 				967A02C62F26015400DD7EEA /* shared_preferences_foundation.framework */,
 				967A02C82F26015400DD7EEA /* shared_preferences_foundation_privacy.bundle */,
+				9614734F2F65786B005CFCAE /* sqflite_darwin.framework */,
+				961473512F65786B005CFCAE /* sqflite_darwin_privacy.bundle */,
 				967A02CA2F26015400DD7EEA /* SQLCipher.framework */,
 				967A02CC2F26015400DD7EEA /* SQLCipher.bundle */,
 				967A02CE2F26015400DD7EEA /* sqlcipher_flutter_libs.framework */,
@@ -832,7 +848,7 @@
 				9705A1C41CF9048500538489 /* Embed Frameworks */,
 				3B06AD1E1E4923F5004D2608 /* Thin Binary */,
 				67564704B5FE6343E4406E2E /* [CP] Embed Pods Frameworks */,
-				367A09FB96386E21D4C4EE98 /* Generate WebRTC dSYM */,
+				AD970FCF38F20966604BC204 /* Generate Embedded Framework dSYMs */,
 				AC2627F633EA807C65B06E75 /* [CP] Copy Pods Resources */,
 			);
 			buildRules = (
@@ -949,6 +965,20 @@
 /* End PBXProject section */
 
 /* Begin PBXReferenceProxy section */
+		9614734F2F65786B005CFCAE /* sqflite_darwin.framework */ = {
+			isa = PBXReferenceProxy;
+			fileType = wrapper.framework;
+			path = sqflite_darwin.framework;
+			remoteRef = 9614734E2F65786B005CFCAE /* PBXContainerItemProxy */;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+		961473512F65786B005CFCAE /* sqflite_darwin_privacy.bundle */ = {
+			isa = PBXReferenceProxy;
+			fileType = wrapper.cfbundle;
+			path = sqflite_darwin_privacy.bundle;
+			remoteRef = 961473502F65786B005CFCAE /* PBXContainerItemProxy */;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
 		967A025C2F26015400DD7EEA /* aliyun_push.framework */ = {
 			isa = PBXReferenceProxy;
 			fileType = wrapper.framework;
@@ -1489,27 +1519,6 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
-		367A09FB96386E21D4C4EE98 /* Generate WebRTC dSYM */ = {
-			isa = PBXShellScriptBuildPhase;
-			buildActionMask = 2147483647;
-			files = (
-			);
-			inputFileListPaths = (
-			);
-			inputPaths = (
-				"${TARGET_BUILD_DIR}/${WRAPPER_NAME}/Frameworks/WebRTC.framework/WebRTC",
-			);
-			name = "Generate WebRTC dSYM";
-			outputFileListPaths = (
-			);
-			outputPaths = (
-				"${DWARF_DSYM_FOLDER_PATH}/WebRTC.framework.dSYM",
-			);
-			runOnlyForDeploymentPostprocessing = 0;
-			shellPath = /bin/sh;
-			shellScript = "set -euo pipefail\n\nif [ \"${ACTION}\" != \"install\" ] && [ \"${ACTION}\" != \"archive\" ]; then\n  exit 0\nfi\n\nAPP_FRAMEWORK_BIN=\"${TARGET_BUILD_DIR}/${WRAPPER_NAME}/Frameworks/WebRTC.framework/WebRTC\"\nWEBRTC_DSYM_DIR=\"${DWARF_DSYM_FOLDER_PATH}/WebRTC.framework.dSYM\"\n\nif [ ! -f \"${APP_FRAMEWORK_BIN}\" ]; then\n  echo \"WebRTC.framework not found at ${APP_FRAMEWORK_BIN}, skip dSYM generation.\"\n  exit 0\nfi\n\nrm -rf \"${WEBRTC_DSYM_DIR}\"\ndsymutil \"${APP_FRAMEWORK_BIN}\" -o \"${WEBRTC_DSYM_DIR}\"\necho \"✅ Generated WebRTC dSYM: ${WEBRTC_DSYM_DIR}\"\n";
-			showEnvVarsInLog = 0;
-		};
 		3B06AD1E1E4923F5004D2608 /* Thin Binary */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
@@ -1595,6 +1604,26 @@
 			runOnlyForDeploymentPostprocessing = 0;
 			shellPath = /bin/sh;
 			shellScript = "\"${PODS_ROOT}/Target Support Files/Pods-Runner/Pods-Runner-resources.sh\"\n";
+			showEnvVarsInLog = 0;
+		};
+		AD970FCF38F20966604BC204 /* Generate Embedded Framework dSYMs */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+				"${TARGET_BUILD_DIR}/${WRAPPER_NAME}/Frameworks",
+			);
+			name = "Generate Embedded Framework dSYMs";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -euo pipefail\n\nif [ \"${ACTION}\" != \"install\" ] && [ \"${ACTION}\" != \"archive\" ]; then\n  exit 0\nfi\n\nAPP_FRAMEWORKS_DIR=\"${TARGET_BUILD_DIR}/${WRAPPER_NAME}/Frameworks\"\nif [ ! -d \"${APP_FRAMEWORKS_DIR}\" ]; then\n  echo \"Frameworks directory not found at ${APP_FRAMEWORKS_DIR}, skip dSYM generation.\"\n  exit 0\nfi\n\nfind \"${APP_FRAMEWORKS_DIR}\" -maxdepth 1 -type d -name \"*.framework\" | while read -r FRAMEWORK_DIR; do\n  FRAMEWORK_NAME=\"$(basename \"${FRAMEWORK_DIR}\" .framework)\"\n  FRAMEWORK_BIN=\"${FRAMEWORK_DIR}/${FRAMEWORK_NAME}\"\n  FRAMEWORK_DSYM=\"${DWARF_DSYM_FOLDER_PATH}/${FRAMEWORK_NAME}.framework.dSYM\"\n\n  if [ ! -f \"${FRAMEWORK_BIN}\" ]; then\n    echo \"Skip ${FRAMEWORK_NAME}: binary not found at ${FRAMEWORK_BIN}\"\n    continue\n  fi\n\n  if [ -d \"${FRAMEWORK_DSYM}\" ]; then\n    echo \"dSYM already exists for ${FRAMEWORK_NAME}, skip.\"\n    continue\n  fi\n\n  if dsymutil \"${FRAMEWORK_BIN}\" -o \"${FRAMEWORK_DSYM}\"; then\n    echo \"✅ Generated dSYM for ${FRAMEWORK_NAME}: ${FRAMEWORK_DSYM}\"\n  else\n    echo \"⚠️ Failed to generate dSYM for ${FRAMEWORK_NAME}, skip.\"\n  fi\ndone\n";
 			showEnvVarsInLog = 0;
 		};
 /* End PBXShellScriptBuildPhase section */

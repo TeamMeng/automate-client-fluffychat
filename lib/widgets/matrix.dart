@@ -503,6 +503,10 @@ class MatrixState extends State<Matrix> with WidgetsBindingObserver {
   bool get _skipAliyunPushOnCurrentDevice => PlatformInfos.isIOSSimulator;
 
   void initMatrix() {
+    if (PlatformInfos.isDesktop) {
+      unawaited(warmupDesktopNotifications());
+    }
+
     // 设置活跃客户端：优先选择已登录的客户端
     if (widget.clients.isNotEmpty) {
       final loggedInIndex = widget.clients.indexWhere((c) => c.isLogged());
@@ -550,7 +554,8 @@ class MatrixState extends State<Matrix> with WidgetsBindingObserver {
 
       // 初始化阿里云推送（唯一的推送渠道）
       if (_skipAliyunPushOnCurrentDevice) {
-        Logs().i('[Matrix] iOS simulator detected, skipping Aliyun Push initialization');
+        Logs().i(
+            '[Matrix] iOS simulator detected, skipping Aliyun Push initialization');
       } else {
         _initAliyunPush();
       }
@@ -630,7 +635,8 @@ class MatrixState extends State<Matrix> with WidgetsBindingObserver {
   /// 登录成功后注册阿里云推送
   Future<void> _registerAliyunPushAfterLogin(Client c) async {
     if (_skipAliyunPushOnCurrentDevice) {
-      Logs().i('[Matrix] iOS simulator detected, skip push registration after login');
+      Logs().i(
+          '[Matrix] iOS simulator detected, skip push registration after login');
       return;
     }
     try {

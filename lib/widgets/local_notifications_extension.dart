@@ -17,8 +17,10 @@ import 'package:psygo/utils/aliyun_push_service.dart';
 import 'package:psygo/utils/client_download_content_extension.dart';
 import 'package:psygo/utils/matrix_sdk_extensions/matrix_locals.dart';
 import 'package:psygo/utils/platform_infos.dart';
+import 'package:psygo/utils/permission_service.dart';
 import 'package:psygo/utils/push_helper.dart';
 import 'package:psygo/utils/window_service.dart';
+import 'package:psygo/widgets/adaptive_dialogs/show_ok_cancel_alert_dialog.dart';
 import 'package:psygo/widgets/fluffy_chat_app.dart';
 import 'package:psygo/widgets/matrix.dart';
 
@@ -30,6 +32,7 @@ extension LocalNotificationsExtension on MatrixState {
   static FlutterLocalNotificationsPlugin? _flutterLocalNotificationsPlugin;
   static bool _isInitialized = false;
   static Future<bool>? _initializationFuture;
+  static bool _desktopWarmupDone = false;
 
   Uri _windowsLogoUri() {
     final logoPath = path.join(
@@ -113,11 +116,61 @@ extension LocalNotificationsExtension on MatrixState {
 
       _isInitialized = initialized;
       return initialized;
-    } catch (e, s) {
+    } catch (e) {
       _isInitialized = false;
       return false;
     } finally {
       _initializationFuture = null;
+    }
+  }
+
+  /// Pre-warm desktop notifications to avoid missing permission prompts when
+  /// the first incoming event arrives while the window is hidden.
+  Future<void> warmupDesktopNotifications() async {
+    if (!PlatformInfos.isDesktop || kIsWeb) return;
+    if (_desktopWarmupDone) return;
+    _desktopWarmupDone = true;
+
+    try {
+      final plugin = await _getNotificationsPlugin();
+      if (plugin == null) {
+        Logs().w('[DesktopNotify] Notifications plugin unavailable');
+        return;
+      }
+
+      if (Platform.isMacOS) {
+        final granted = await plugin
+            .resolvePlatformSpecificImplementation<
+                MacOSFlutterLocalNotificationsPlugin>()
+            ?.requestPermissions(
+              alert: true,
+              badge: true,
+              sound: true,
+            );
+        Logs().i('[DesktopNotify] macOS notification permission: $granted');
+        if (granted != true) {
+          WidgetsBinding.instance.addPostFrameCallback((_) async {
+            await _promptMacOSNotificationSettings();
+          });
+        }
+      }
+    } catch (e, s) {
+      Logs().w('[DesktopNotify] Warmup failed', e, s);
+    }
+  }
+
+  Future<void> _promptMacOSNotificationSettings() async {
+    if (!mounted) return;
+    final result = await showOkCancelAlertDialog(
+      context: context,
+      title: L10n.of(context).pushNotificationsNotAvailable,
+      message:
+          'Enable notifications in macOS System Settings > Notifications to receive message alerts while running in the background.',
+      okLabel: L10n.of(context).authOpenSettings,
+      cancelLabel: L10n.of(context).cancel,
+    );
+    if (result == OkCancelResult.ok) {
+      await PermissionService.instance.openSettings();
     }
   }
 
@@ -138,7 +191,8 @@ extension LocalNotificationsExtension on MatrixState {
           return;
         }
         if (PlatformInfos.isDesktop &&
-            WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed &&
+            WidgetsBinding.instance.lifecycleState ==
+                AppLifecycleState.resumed &&
             !WindowService.isHiddenToTray) {
           try {
             final isVisible = await windowManager.isVisible();
@@ -151,12 +205,14 @@ extension LocalNotificationsExtension on MatrixState {
               return;
             }
           } catch (e, s) {
-            Logs().w('Unable to query window state for notification gating', e, s);
+            Logs().w(
+                'Unable to query window state for notification gating', e, s);
           }
         }
         // 移动端：App 在前台且在当前房间时不显示通知
         if ((Platform.isAndroid || Platform.isIOS) &&
-            WidgetsBinding.instance.lifecycleState == AppLifecycleState.resumed) {
+            WidgetsBinding.instance.lifecycleState ==
+                AppLifecycleState.resumed) {
           if (Platform.isLinux) {
             Logs().i('[LinuxNotify] skip: active room foreground (mobile)');
           }
@@ -194,7 +250,8 @@ extension LocalNotificationsExtension on MatrixState {
               rounded: true,
             );
           } catch (e, s) {
-            Logs().d('Unable to pre-download avatar for web notification', e, s);
+            Logs()
+                .d('Unable to pre-download avatar for web notification', e, s);
           }
 
           thumbnailUri =
@@ -357,9 +414,7 @@ extension LocalNotificationsExtension on MatrixState {
           );
         } else if (Platform.isMacOS) {
           notificationDetails = const NotificationDetails(
-            macOS: DarwinNotificationDetails(
-              sound: 'notification.caf',
-            ),
+            macOS: DarwinNotificationDetails(),
           );
         }
 
