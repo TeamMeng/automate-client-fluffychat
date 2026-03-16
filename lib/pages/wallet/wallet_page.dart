@@ -35,6 +35,10 @@ class _WalletPageState extends State<WalletPage> {
   // 用户余额（分）- 从后端获取
   int _balanceCredits = 0;
 
+  // 邀请信息
+  InvitationInfo? _invitationInfo;
+  bool _invitationLoading = true;
+
   // 自动刷新定时器（每5秒刷新余额）
   Timer? _refreshTimer;
 
@@ -47,6 +51,7 @@ class _WalletPageState extends State<WalletPage> {
     super.initState();
     _customAmount = _presetAmounts[_selectedPresetIndex];
     _loadUserBalance();
+    _loadInvitationInfo();
     // 启动定时器，每5秒自动刷新余额
     _refreshTimer = Timer.periodic(const Duration(seconds: 5), (_) {
       _loadUserBalance();
@@ -73,6 +78,25 @@ class _WalletPageState extends State<WalletPage> {
       // 静默失败，不显示错误提示
       if (kDebugMode) {
         print('Failed to load balance: $e');
+      }
+    }
+  }
+
+  Future<void> _loadInvitationInfo() async {
+    if (!mounted) return;
+    try {
+      final apiClient = context.read<PsygoApiClient>();
+      final info = await apiClient.getInvitationInfo();
+      if (!mounted) return;
+      setState(() {
+        _invitationInfo = info;
+        _invitationLoading = false;
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() => _invitationLoading = false);
+      if (kDebugMode) {
+        print('Failed to load invitation info: $e');
       }
     }
   }
@@ -321,6 +345,10 @@ class _WalletPageState extends State<WalletPage> {
             const SizedBox(height: 24),
             // 余额卡片
             _buildBalanceCard(theme, l10n),
+            const SizedBox(height: 20),
+
+            // 邀请好友卡片
+            _buildInvitationCard(theme, l10n),
             const SizedBox(height: 20),
 
             // 充值区域
@@ -790,6 +818,283 @@ class _WalletPageState extends State<WalletPage> {
                 ],
               ),
             ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildInvitationCard(ThemeData theme, L10n l10n) {
+    final colorScheme = theme.colorScheme;
+    final isDark = theme.brightness == Brightness.dark;
+    final outline =
+        colorScheme.outlineVariant.withValues(alpha: isDark ? 0.55 : 0.35);
+
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 16),
+      padding: const EdgeInsets.all(24),
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [
+            colorScheme.surfaceContainerHigh,
+            _tint(colorScheme.surfaceContainerLow, _lightGreen, isDark ? 0.1 : 0.3),
+          ],
+        ),
+        borderRadius: BorderRadius.circular(24),
+        border: Border.all(color: outline, width: 1.5),
+        boxShadow: [
+          BoxShadow(
+            color: _primaryGreen.withValues(alpha: isDark ? 0.1 : 0.06),
+            blurRadius: 16,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                decoration: BoxDecoration(
+                  color: _tint(colorScheme.surface, _lightGreen, isDark ? 0.18 : 0.8),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.card_giftcard_rounded, size: 16, color: _primaryGreen),
+                    const SizedBox(width: 4),
+                    Text(
+                      L10n.of(context).inviteFriends,
+                      style: const TextStyle(color: _primaryGreen, fontWeight: FontWeight.w600, fontSize: 14),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          if (_invitationLoading)
+            const Center(
+              child: Padding(
+                padding: EdgeInsets.symmetric(vertical: 12),
+                child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: _primaryGreen)),
+              ),
+            )
+          else ...[
+            // 规则说明 + 进度
+            Text(
+              _invitationInfo != null
+                  ? L10n.of(context).inviteRewardRule(
+                      _invitationInfo!.rewardPerInvite,
+                      _invitationInfo!.currentInvitees,
+                      _invitationInfo!.maxInvitees,
+                    )
+                  : L10n.of(context).inviteRewardRuleSimple,
+              style: TextStyle(fontSize: 13, color: colorScheme.onSurfaceVariant, height: 1.5),
+            ),
+            if (_invitationInfo != null && _invitationInfo!.isFull) ...[
+              const SizedBox(height: 8),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.orange.withValues(alpha: 0.1),
+                  borderRadius: BorderRadius.circular(8),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    const Icon(Icons.info_outline, size: 14, color: Colors.orange),
+                    const SizedBox(width: 4),
+                    Text(L10n.of(context).invitationQuotaFull, style: const TextStyle(fontSize: 13, color: Colors.orange, fontWeight: FontWeight.w500)),
+                  ],
+                ),
+              ),
+            ],
+            const SizedBox(height: 16),
+            Row(
+              children: [
+                Expanded(
+                  child: SizedBox(
+                    height: 44,
+                    child: ElevatedButton.icon(
+                      onPressed: _showMyInvitationCode,
+                      icon: const Icon(Icons.qr_code_rounded, size: 18),
+                      label: Text(L10n.of(context).viewInvitationCode, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                      style: ElevatedButton.styleFrom(
+                        backgroundColor: (_invitationInfo?.isFull ?? false) ? Colors.grey : _primaryGreen,
+                        foregroundColor: Colors.white,
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                        elevation: 0,
+                      ),
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 12),
+                Expanded(
+                  child: SizedBox(
+                    height: 44,
+                    child: OutlinedButton.icon(
+                      onPressed: (_invitationInfo?.isFull ?? false) ? null : _showBindInvitationDialog,
+                      icon: const Icon(Icons.input_rounded, size: 18),
+                      label: Text(L10n.of(context).enterInvitationCodeButton, style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600)),
+                      style: OutlinedButton.styleFrom(
+                        foregroundColor: (_invitationInfo?.isFull ?? false) ? Colors.grey : _primaryGreen,
+                        side: BorderSide(color: (_invitationInfo?.isFull ?? false) ? Colors.grey : _primaryGreen),
+                        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                      ),
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  void _showMyInvitationCode() async {
+    // 如果没有缓存，先拉取
+    if (_invitationInfo == null) {
+      await _loadInvitationInfo();
+    }
+    final info = _invitationInfo;
+    if (info == null || !mounted) return;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Row(
+            children: [
+              const Icon(Icons.card_giftcard_rounded, color: _primaryGreen),
+              const SizedBox(width: 8),
+              Text(L10n.of(context).myInvitationCode, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+            ],
+          ),
+          content: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+                decoration: BoxDecoration(
+                  color: _lightGreen,
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Text(
+                      info.invitationCode,
+                      style: const TextStyle(fontSize: 28, fontWeight: FontWeight.w700, letterSpacing: 4, color: Color(0xFF2E7D32)),
+                    ),
+                    const SizedBox(width: 12),
+                    IconButton(
+                      icon: const Icon(Icons.copy, size: 20, color: _primaryGreen),
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: info.invitationCode));
+                        ScaffoldMessenger.of(ctx).showSnackBar(
+                          SnackBar(content: Text(L10n.of(context).invitationCodeCopied), duration: const Duration(seconds: 1)),
+                        );
+                      },
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(height: 12),
+              Text(
+                L10n.of(context).invitedProgress(info.currentInvitees, info.maxInvitees),
+                style: TextStyle(fontSize: 14, color: Colors.grey[600]),
+              ),
+              if (info.isFull)
+                Padding(
+                  padding: const EdgeInsets.only(top: 8),
+                  child: Text(
+                    L10n.of(context).invitationQuotaFull,
+                    style: const TextStyle(fontSize: 13, color: Colors.orange, fontWeight: FontWeight.w500),
+                  ),
+                ),
+            ],
+          ),
+          actions: [
+            TextButton(
+              onPressed: () => Navigator.of(ctx).pop(),
+              child: Text(L10n.of(context).close, style: const TextStyle(color: _primaryGreen)),
+            ),
+          ],
+        ),
+      );
+  }
+
+  void _showBindInvitationDialog() {
+    final codeController = TextEditingController();
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text(L10n.of(context).enterInvitationCodeButton, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.w600)),
+        content: TextField(
+          controller: codeController,
+          textCapitalization: TextCapitalization.characters,
+          maxLength: 8,
+          decoration: InputDecoration(
+            hintText: L10n.of(context).enterInvitationCodeHint,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(12)),
+            focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: const BorderSide(color: _primaryGreen, width: 2),
+            ),
+          ),
+          inputFormatters: [
+            FilteringTextInputFormatter.allow(RegExp(r'[A-Za-z0-9]')),
+            TextInputFormatter.withFunction((oldValue, newValue) {
+              return newValue.copyWith(text: newValue.text.toUpperCase());
+            }),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: Text(L10n.of(context).cancel, style: TextStyle(color: Colors.grey[600])),
+          ),
+          ElevatedButton(
+            onPressed: () async {
+              final code = codeController.text.trim();
+              if (code.length != 8) {
+                ScaffoldMessenger.of(ctx).showSnackBar(
+                  SnackBar(content: Text(L10n.of(context).invitationCodeInvalid)),
+                );
+                return;
+              }
+              Navigator.of(ctx).pop();
+              try {
+                final apiClient = context.read<PsygoApiClient>();
+                final result = await apiClient.bindInvitation(code);
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text(L10n.of(context).invitationBindSuccess(result.inviterNickname, result.rewardCredits)),
+                    backgroundColor: _primaryGreen,
+                  ),
+                );
+                _loadInvitationInfo();
+              } catch (e) {
+                if (!mounted) return;
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(content: Text('$e')),
+                );
+              }
+            },
+            style: ElevatedButton.styleFrom(
+              backgroundColor: _primaryGreen,
+              foregroundColor: Colors.white,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(8)),
+            ),
+            child: Text(L10n.of(context).confirmBind),
           ),
         ],
       ),
