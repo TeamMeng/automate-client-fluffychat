@@ -487,6 +487,67 @@ class PsygoApiClient {
     }
   }
 
+  /// 绑定邀请码
+  Future<BindInvitationResponse> bindInvitation(String code) async {
+    final res = await _requestWithAuthRetry((token) {
+      return _dio.post<Map<String, dynamic>>(
+        '${PsygoConfig.baseUrl}/api/users/invitation/bind',
+        data: {'invitation_code': code},
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+    });
+
+    final data = res.data ?? {};
+    final respCode = data['code'] as int? ?? -1;
+    if (res.statusCode != 200 || respCode != 0) {
+      await _handleAuthError(respCode);
+      throw AutomateBackendException(
+        data['message']?.toString() ?? '绑定邀请码失败',
+        statusCode: res.statusCode,
+      );
+    }
+
+    final respData = data['data'] as Map<String, dynamic>?;
+    if (respData == null) {
+      throw AutomateBackendException('Empty response data');
+    }
+
+    return BindInvitationResponse.fromJson(respData);
+  }
+
+  /// 获取邀请信息
+  Future<InvitationInfo> getInvitationInfo() async {
+    await _syncAuthState();
+    final userId = auth.userId;
+    if (userId == null || userId.isEmpty) {
+      throw AutomateBackendException('User ID not found');
+    }
+
+    final res = await _requestWithAuthRetry((token) {
+      return _dio.get<Map<String, dynamic>>(
+        '${PsygoConfig.baseUrl}/api/users/$userId/invitation',
+        options: Options(headers: {'Authorization': 'Bearer $token'}),
+      );
+    });
+
+    final data = res.data ?? {};
+    final respCode = data['code'] as int? ?? -1;
+    if (res.statusCode != 200 || respCode != 0) {
+      await _handleAuthError(respCode);
+      throw AutomateBackendException(
+        data['message']?.toString() ?? '获取邀请信息失败',
+        statusCode: res.statusCode,
+      );
+    }
+
+    final respData = data['data'] as Map<String, dynamic>?;
+    if (respData == null) {
+      throw AutomateBackendException('Empty response data');
+    }
+
+    return InvitationInfo.fromJson(respData);
+  }
+
   /// 获取用户信息（包含余额）
   Future<UserInfo> getUserInfo() async {
     await _syncAuthState();
@@ -934,6 +995,74 @@ class AgreementStatus {
           .whereType<Map<String, dynamic>>()
           .map((e) => AgreementAcceptance.fromJson(e))
           .toList(),
+    );
+  }
+}
+
+/// 绑定邀请码响应
+class BindInvitationResponse {
+  final String inviterNickname;
+  final int rewardCredits;
+
+  BindInvitationResponse({
+    required this.inviterNickname,
+    required this.rewardCredits,
+  });
+
+  factory BindInvitationResponse.fromJson(Map<String, dynamic> json) {
+    return BindInvitationResponse(
+      inviterNickname: json['inviter_nickname'] as String? ?? '',
+      rewardCredits: (json['reward_credits'] as num?)?.toInt() ?? 0,
+    );
+  }
+}
+
+/// 邀请信息
+class InvitationInfo {
+  final String invitationCode;
+  final int maxInvitees;
+  final int currentInvitees;
+  final int rewardPerInvite;
+  final List<InviteeInfo> invitees;
+
+  InvitationInfo({
+    required this.invitationCode,
+    required this.maxInvitees,
+    required this.currentInvitees,
+    required this.rewardPerInvite,
+    required this.invitees,
+  });
+
+  bool get isFull => currentInvitees >= maxInvitees;
+
+  factory InvitationInfo.fromJson(Map<String, dynamic> json) {
+    final inviteesList = json['invitees'] as List<dynamic>? ?? [];
+    return InvitationInfo(
+      invitationCode: json['invitation_code'] as String? ?? '',
+      maxInvitees: (json['max_invitees'] as num?)?.toInt() ?? 10,
+      currentInvitees: (json['current_invitees'] as num?)?.toInt() ?? 0,
+      rewardPerInvite: (json['reward_per_invite'] as num?)?.toInt() ?? 0,
+      invitees: inviteesList
+          .whereType<Map<String, dynamic>>()
+          .map((e) => InviteeInfo.fromJson(e))
+          .toList(),
+    );
+  }
+}
+
+/// 被邀请人信息
+class InviteeInfo {
+  final String nickname;
+  final DateTime? createdAt;
+
+  InviteeInfo({required this.nickname, this.createdAt});
+
+  factory InviteeInfo.fromJson(Map<String, dynamic> json) {
+    return InviteeInfo(
+      nickname: json['nickname'] as String? ?? '',
+      createdAt: json['created_at'] != null
+          ? DateTime.tryParse(json['created_at'] as String)
+          : null,
     );
   }
 }
